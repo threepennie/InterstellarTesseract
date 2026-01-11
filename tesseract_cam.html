@@ -194,6 +194,10 @@ function resizeAtlasFromVideoOrFallback(){
   atlas.width = atlasW;
   atlas.height = atlasH;
 
+// shift buffer: atlasから最上段( sliceH )を除いた領域だけを保持
+shiftC.width = atlasW;
+shiftC.height = Math.max(1, atlasH - sliceH);
+
   actx.fillStyle = "#000";
   actx.fillRect(0,0,atlasW,atlasH);
 }
@@ -204,6 +208,8 @@ const edgeC = document.createElement('canvas');
 const highC = document.createElement('canvas');
 const diffC = document.createElement('canvas');
 const prevC = document.createElement('canvas'); // previous capture for diff fallback
+const shiftC = document.createElement('canvas'); // atlas自己コピー回避用
+const shiftCtx = shiftC.getContext('2d', { willReadFrequently: true });
 
 function syncTempCanvases(){
   for (const c of [origC, blurC, edgeC, highC, diffC, prevC]){
@@ -286,7 +292,15 @@ function sobelEdgeFromLum(lum){
 /* Capture every 4s, layer split, with fallback if getImageData blocked */
 function captureAndInsert(t){
   // shift old shelves down by one shelf
-  actx.drawImage(atlas, 0, 0, atlasW, atlasH - sliceH, 0, sliceH, atlasW, atlasH - sliceH);
+// --- shift old shelves down safely (Firefox: avoid drawing atlas onto itself)
+  const copyH = atlasH - sliceH;
+  if (copyH > 0) {
+    // atlas上部(copyH)をshiftCへコピー
+    shiftCtx.clearRect(0, 0, shiftC.width, shiftC.height);
+    shiftCtx.drawImage(atlas, 0, 0, atlasW, copyH, 0, 0, atlasW, copyH);
+    // shiftCをatlasへ下に貼り戻す
+    actx.drawImage(shiftC, 0, 0, atlasW, copyH, 0, sliceH, atlasW, copyH);
+  }
 
   const octx = origC.getContext('2d', { willReadFrequently:true });
   const bctx = blurC.getContext('2d', { willReadFrequently:true });
