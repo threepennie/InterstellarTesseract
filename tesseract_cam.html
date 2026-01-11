@@ -19,6 +19,17 @@
       backdrop-filter: blur(8px);
       user-select:none;
     }
+
+    window.addEventListener('offline', () => {
+  toast('Offline: DevToolsのNetworkがOfflineになっている可能性');
+  setStatus('OFFLINE (DevTools Network Offline?)');
+});
+window.addEventListener('online', () => {
+  toast('Online');
+  setStatus('Online');
+});
+
+
     #hud b { color:#fff; }
     #hud .row { opacity:.92; }
     #hud .dim { opacity:.65; }
