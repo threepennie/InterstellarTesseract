@@ -15,8 +15,6 @@
       border: 1px solid rgba(255,255,255,.12);
       border-radius: 12px;
       padding: 10px 12px;
-      max-width: min(900px, calc(100vw - 24px));
-      backdrop-filter: blur(8px);
       user-select:none;
     }
     #hud b { color:#fff; }
@@ -33,41 +31,45 @@
       margin-left: 8px; padding: 6px 10px;
       border-radius: 10px;
       border: 1px solid rgba(255,255,255,.18);
-      background: rgba(0,0,0,.35); color:#fff;
+      background: rgba(255,255,255,.06);
+      color:#fff;
       cursor:pointer;
+      font: inherit;
     }
-    #hud label{ display:inline-flex; align-items:center; gap:6px; }
-    #hud input[type="checkbox"]{ width:auto; margin:0; transform: translateY(1px); }
+    #hud label { padding: 5px 10px; display:inline-flex; gap:6px; align-items:center; }
+    #hud button:hover{ background: rgba(255,255,255,.10); }
+    #hud input[type="checkbox"]{ width:auto; margin:0; }
     #toast{
-      position:fixed; right:12px; bottom:12px; z-index:20;
-      color:#fff; font: 12px ui-monospace, monospace;
-      background: rgba(0,0,0,.45);
-      border: 1px solid rgba(255,255,255,.12);
+      position:fixed; left:50%; bottom:14px; transform:translateX(-50%);
+      padding: 10px 14px;
+      background: rgba(0,0,0,.6);
+      border: 1px solid rgba(255,255,255,.14);
       border-radius: 12px;
-      padding: 8px 10px;
-      opacity:0; transform: translateY(6px);
-      transition: opacity .25s ease, transform .25s ease;
-      pointer-events:none;
+      color:#fff;
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      opacity:0; pointer-events:none;
+      transition: opacity .18s ease;
+      z-index: 20;
+      max-width: 86vw;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    #toast.show { opacity:1; transform: translateY(0); }
-    canvas { display:block; }
-
-    /* デバッグ：atlasを画面に出す（AキーでON/OFF） */
+    #toast.show{ opacity:1; }
     #atlasPreview{
-      position:fixed; right:12px; top:12px; z-index:9;
-      border:1px solid rgba(255,255,255,.15);
-      border-radius:12px;
-      background: rgba(0,0,0,.35);
-      width: 220px;
-      height: auto;
+      position:fixed; right:12px; top:12px;
+      width: 260px; height:auto;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.16);
+      background: rgba(0,0,0,.55);
       display:none;
+      z-index: 11;
+      image-rendering: pixelated;
     }
   </style>
 </head>
 <body>
   <div id="app"></div>
-
-  <canvas id="atlasPreview"></canvas>
 
   <div id="hud">
     <div class="row"><b>Tesseract Installation</b> — Flickr → 4s interval → layer shelves (fixed atlas)</div>
@@ -96,10 +98,11 @@
 
     <div class="row dim" style="margin-top:6px;">
       Mouse: drag rotate / Wheel: zoom　
-      Keys: <b>H</b> HUD <b>F</b> Fullscreen <b>M</b> Mirror <b>C</b> Color <b>[</b>/<b>]</b> slices <b>1</b> shelves <b>2</b> tesseract <b>3</b> dust <b>A</b> atlas
+      Keys: <b>H</b> HUD <b>F</b> Fullscreen <b>M</b> Mirror <b>C</b> Color <b>[</b>/<b>]</b> slices <b>1</b> shelves <b>2</b> tesseract <b>3</b> dust <b>B</b> blend <b>A</b> atlas
     </div>
   </div>
 
+  <img id="atlasPreview" alt="atlas preview" />
   <div id="toast"></div>
 
 <script type="module">
@@ -122,761 +125,30 @@ function toast(msg){
   toastEl.textContent = msg;
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=> toastEl.classList.remove('show'), 1200);
+  toastTimer = setTimeout(()=>toastEl.classList.remove('show'), 1200);
 }
 
-/* offline/online guard */
-window.addEventListener('offline', () => { toast('OFFLINE (DevTools Network Offline?)'); setStatus('OFFLINE'); });
-window.addEventListener('online',  () => { toast('ONLINE'); });
-
-/* ---------- Flickr JSONP ---------- */
-function fetchFlickrPublicFeed(tags){
-  return new Promise((resolve, reject)=>{
-    const script = document.createElement('script');
-    const url = new URL('https://www.flickr.com/services/feeds/photos_public.gne');
-    url.searchParams.set('format', 'json');
-    url.searchParams.set('tags', tags || 'space,nebula,night');
-    url.searchParams.set('tagmode', 'any');
-
-    const prev = window.jsonFlickrFeed;
-    let done = false;
-
-    const cleanup = ()=>{
-      script.remove();
-      if (prev) window.jsonFlickrFeed = prev;
-      else try { delete window.jsonFlickrFeed; } catch {}
-    };
-
-    window.jsonFlickrFeed = (data)=>{
-      if (done) return;
-      done = true;
-      cleanup();
-      resolve(data);
-    };
-
-    script.src = url.toString();
-    script.async = true;
-    script.onerror = ()=>{
-      if (done) return;
-      done = true;
-      cleanup();
-      reject(new Error('Failed to load Flickr feed (script error)'));
-    };
-    document.head.appendChild(script);
-
-    setTimeout(()=>{
-      if (done) return;
-      done = true;
-      cleanup();
-      reject(new Error('Flickr feed timeout'));
-    }, 9000);
-  });
-}
-
-/* ---------- proxy ---------- */
-function proxifyWeserv(url){
-  const stripped = url.replace(/^https?:\/\//,'');
-  const prox = new URL('https://images.weserv.nl/');
-  prox.searchParams.set('url', stripped);
-  prox.searchParams.set('w', '1280');
-  prox.searchParams.set('fit', 'contain');
-  return prox.toString();
-}
-async function loadImage(url, useProxy){
-  return new Promise((resolve, reject)=>{
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.decoding = 'async';
-    img.referrerPolicy = 'no-referrer';
-    img.onload = ()=> resolve(img);
-    img.onerror = ()=> reject(new Error('Image load failed (CORS or network)'));
-    img.src = useProxy ? proxifyWeserv(url) : url;
-  });
-}
-
-/* ---------- Three.js ---------- */
 const app = document.getElementById('app');
-const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance" });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
-renderer.setClearColor(0x000000, 1);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x000000, 0.045);
+scene.fog = new THREE.FogExp2(0x000000, 0.06);
 
-const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 200);
-camera.position.set(0, 0.9, 3.2);
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.05, 120);
+camera.position.set(0, 0.4, 5.4);
+
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false, powerPreference:'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x000000, 1.0);
+app.appendChild(renderer.domElement);
+
+const gl = renderer.getContext();
+const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 0;
+maxTexEl.textContent = String(maxTex);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-controls.dampingFactor = 0.06;
-
-scene.add(new THREE.AmbientLight(0xffffff, 0.25));
-const dir = new THREE.DirectionalLight(0xffffff, 0.55);
-dir.position.set(2, 3, 1);
-scene.add(dir);
-
-/* ---------- Fixed Atlas (NO RESIZE EVER) ---------- */
-const MAX_TEX = renderer.capabilities.maxTextureSize || 8192;
-const ATLAS_H = Math.min(MAX_TEX, 8192);          // ←固定（安全側）
-maxTexEl.textContent = String(MAX_TEX);
-atlasHEl.textContent = String(ATLAS_H);
-
-const atlasW = 512;
-const baseSliceH = 288;                           // ←固定
-const sliceH = baseSliceH * 4;                    // 4レイヤ分（edge/blur/high/diff）
-
-let requestedSlices = 36;
-let maxSlices = Math.max(4, Math.floor(ATLAS_H / sliceH));
-let slices = Math.min(requestedSlices, maxSlices);
-
-reqSlicesEl.textContent = String(requestedSlices);
-usedSlicesEl.textContent = String(slices);
-
-/* atlas canvas */
-const atlas = document.createElement('canvas');
-atlas.width = atlasW;
-atlas.height = ATLAS_H;
-const actx = atlas.getContext('2d', { willReadFrequently:true });
-actx.fillStyle = '#000';
-actx.fillRect(0,0,atlasW,ATLAS_H);
-
-/* shift buffer (最大サイズ固定、コピー時に必要領域だけ使う) */
-const shiftC = document.createElement('canvas');
-shiftC.width = atlasW;
-shiftC.height = ATLAS_H;
-const shiftCtx = shiftC.getContext('2d', { willReadFrequently:true });
-
-/* per-frame small canvases */
-const origC = document.createElement('canvas');
-const blurC = document.createElement('canvas');
-const edgeC = document.createElement('canvas');
-const highC = document.createElement('canvas');
-const diffC = document.createElement('canvas');
-const prevC = document.createElement('canvas');
-for (const c of [origC, blurC, edgeC, highC, diffC, prevC]){
-  c.width = atlasW;
-  c.height = baseSliceH;
-}
-
-/* preview (optional) */
-const atlasPreview = document.getElementById('atlasPreview');
-atlasPreview.width = atlasW;
-atlasPreview.height = ATLAS_H;
-const pctx = atlasPreview.getContext('2d', { willReadFrequently:true });
-let atlasPreviewOn = false;
-
-function updateAtlasPreview(){
-  if (!atlasPreviewOn) return;
-  pctx.clearRect(0,0,atlasW,ATLAS_H);
-  pctx.drawImage(atlas, 0, 0);
-}
-
-function usedHeight(){
-  return sliceH * slices;
-}
-
-/* texture (size fixed) */
-const atlasTex = new THREE.CanvasTexture(atlas);
-atlasTex.minFilter = THREE.LinearFilter;
-atlasTex.magFilter = THREE.LinearFilter;
-atlasTex.wrapS = THREE.ClampToEdgeWrapping;
-atlasTex.wrapT = THREE.ClampToEdgeWrapping;
-atlasTex.colorSpace = THREE.SRGBColorSpace;
-
-/* ---------- drawing helpers ---------- */
-let mirror = true;
-
-function drawImageCover(ctx, img){
-  const cw = atlasW, ch = baseSliceH;
-  const iw = img.naturalWidth || img.width || 1;
-  const ih = img.naturalHeight || img.height || 1;
-
-  const scale = Math.max(cw / iw, ch / ih);
-  const sw = cw / scale;
-  const sh = ch / scale;
-  const sx = (iw - sw) * 0.5;
-  const sy = (ih - sh) * 0.5;
-
-  ctx.save();
-  ctx.clearRect(0,0,cw,ch);
-  if (mirror){
-    ctx.translate(cw, 0);
-    ctx.scale(-1, 1);
-  }
-  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cw, ch);
-  ctx.restore();
-}
-
-function genFallbackNoise(ctx, t){
-  const img = ctx.createImageData(atlasW, baseSliceH);
-  for (let i=0; i<img.data.length; i+=4){
-    const x = ((i/4) % atlasW) / atlasW;
-    const y = Math.floor((i/4) / atlasW) / baseSliceH;
-    const v = (Math.sin(20*x + 7*y + t*2) + Math.sin(13*x - 11*y + t*1.3)) * 0.5;
-    const n = (v*0.5+0.5) * 255;
-    img.data[i+0] = n;
-    img.data[i+1] = n*0.8;
-    img.data[i+2] = n*0.6;
-    img.data[i+3] = 255;
-  }
-  ctx.putImageData(img, 0, 0);
-}
-
-function buildLayersFromOrig(){
-  const bctx = blurC.getContext('2d', { willReadFrequently:true });
-  const ectx = edgeC.getContext('2d', { willReadFrequently:true });
-  const hctx = highC.getContext('2d', { willReadFrequently:true });
-  const dctx = diffC.getContext('2d', { willReadFrequently:true });
-  const pctx2 = prevC.getContext('2d', { willReadFrequently:true });
-
-  bctx.save();
-  bctx.clearRect(0,0,atlasW,baseSliceH);
-  bctx.filter = 'blur(12px)';
-  bctx.drawImage(origC, 0, 0);
-  bctx.restore();
-
-  ectx.save();
-  ectx.clearRect(0,0,atlasW,baseSliceH);
-  ectx.filter = 'contrast(280%)';
-  ectx.globalCompositeOperation = 'source-over';
-  ectx.drawImage(origC, 0, 0);
-  ectx.globalCompositeOperation = 'difference';
-  ectx.drawImage(origC, 1, 0);
-  ectx.drawImage(origC, 0, 1);
-  ectx.globalCompositeOperation = 'source-over';
-  ectx.restore();
-
-  hctx.save();
-  hctx.clearRect(0,0,atlasW,baseSliceH);
-  hctx.filter = 'contrast(190%) brightness(110%)';
-  hctx.fillStyle = 'rgb(128,128,128)';
-  hctx.fillRect(0,0,atlasW,baseSliceH);
-  hctx.globalCompositeOperation = 'difference';
-  hctx.drawImage(blurC, 0, 0);
-  hctx.globalCompositeOperation = 'difference';
-  hctx.drawImage(origC, 0, 0);
-  hctx.globalCompositeOperation = 'source-over';
-  hctx.restore();
-
-  dctx.save();
-  dctx.clearRect(0,0,atlasW,baseSliceH);
-  dctx.filter = 'contrast(320%)';
-  dctx.globalCompositeOperation = 'source-over';
-  dctx.drawImage(origC, 0, 0);
-  dctx.globalCompositeOperation = 'difference';
-  dctx.drawImage(prevC, 0, 0);
-  dctx.globalCompositeOperation = 'source-over';
-  dctx.restore();
-
-  pctx2.clearRect(0,0,atlasW,baseSliceH);
-  pctx2.drawImage(origC, 0, 0);
-}
-
-/* 使っている領域(usedH)内だけをシフトし、トップに新段を挿入 */
-function insertTopShelf(){
-  const usedH = usedHeight();
-  const copyH = usedH - sliceH;
-
-  if (copyH > 0){
-    shiftCtx.clearRect(0,0,atlasW,copyH);
-    shiftCtx.drawImage(atlas, 0, 0, atlasW, copyH, 0, 0, atlasW, copyH);
-    actx.drawImage(shiftC, 0, 0, atlasW, copyH, 0, sliceH, atlasW, copyH);
-  }
-
-  // トップ段を描画
-  actx.drawImage(edgeC, 0, 0, atlasW, baseSliceH, 0, 0*baseSliceH, atlasW, baseSliceH);
-  actx.drawImage(blurC, 0, 0, atlasW, baseSliceH, 0, 1*baseSliceH, atlasW, baseSliceH);
-  actx.drawImage(highC, 0, 0, atlasW, baseSliceH, 0, 2*baseSliceH, atlasW, baseSliceH);
-  actx.drawImage(diffC, 0, 0, atlasW, baseSliceH, 0, 3*baseSliceH, atlasW, baseSliceH);
-
-  // 使っていない領域は薄く暗く保つ（見た目を安定）
-  actx.fillStyle = 'rgba(0,0,0,0.02)';
-  actx.fillRect(0, usedH, atlasW, ATLAS_H - usedH);
-
-  // トップも軽く減衰
-  actx.fillStyle = 'rgba(0,0,0,0.03)';
-  actx.fillRect(0,0,atlasW,sliceH);
-}
-
-/* ---------- Visual controls ---------- */
-let colorMode = 0;
-let motion = 0.12;
-let motionPulse = 0.0;
-
-/* ---------- Shader (pixel-based y mapping) ---------- */
-const baseUniforms = {
-  uAtlas: { value: atlasTex },
-  uAtlasH: { value: ATLAS_H },
-  uSliceH: { value: sliceH },
-  uSlices: { value: slices },
-  uTime: { value: 0 },
-  uSliceIndex: { value: 0 },
-  uMotion: { value: 0 },
-  uColorMode: { value: colorMode },
-  uGain: { value: 1.15 },
-  uLayerMode: { value: 0 }
-};
-
-const shelvesMat = new THREE.ShaderMaterial({
-  transparent: true,
-  depthWrite: false,
-  uniforms: baseUniforms,
-  vertexShader: `
-    varying vec2 vUv;
-    varying float vDepth;
-    void main(){
-      vUv = uv;
-      vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      vDepth = -mv.z;
-      gl_Position = projectionMatrix * mv;
-    }
-  `,
-  fragmentShader: `
-    precision highp float;
-    varying vec2 vUv;
-    varying float vDepth;
-
-    uniform sampler2D uAtlas;
-    uniform float uAtlasH;
-    uniform float uSliceH;
-    uniform float uSlices;
-    uniform float uTime;
-    uniform float uSliceIndex;
-    uniform float uMotion;
-    uniform int uColorMode;
-    uniform float uGain;
-    uniform int uLayerMode;
-
-    float hash21(vec2 p){
-      p = fract(p*vec2(123.34, 345.45));
-      p += dot(p, p+34.345);
-      return fract(p.x*p.y);
-    }
-    vec3 tonemap(vec3 c){
-      c = max(c, 0.0);
-      c = c / (1.0 + c);
-      return pow(c, vec3(0.95));
-    }
-
-    void main(){
-      float m = uMotion;
-      float t = uTime;
-
-      vec2 uv = vUv;
-      vec2 p  = uv - 0.5;
-      float r = length(p);
-
-      float depthFactor = clamp((uSliceIndex / max(uSlices-1.0, 1.0)), 0.0, 1.0);
-
-      float lens = (0.10 + 0.32*m) * (0.35 + depthFactor);
-      p *= (1.0 + lens * r*r);
-
-      float swirl = (0.18 + 0.62*m) * (0.25 + depthFactor);
-      float ang = swirl * sin(t*0.7 + depthFactor*6.283 + p.x*2.0 - p.y*2.0);
-      float cs = cos(ang), sn = sin(ang);
-      p = mat2(cs, -sn, sn, cs) * p;
-
-      float ca = (0.002 + 0.01*m) * (0.35 + r);
-      vec2 uvR = p + 0.5 + ca * normalize(p + 1e-5);
-      vec2 uvG = p + 0.5;
-      vec2 uvB = p + 0.5 - ca * normalize(p + 1e-5);
-
-      float bandIndex = 0.0;
-      float localY = 0.0;
-
-      if (uLayerMode == 1) {
-        bandIndex = 3.0;
-        localY = clamp(uvG.y, 0.0, 1.0);
-      } else {
-        if (uvG.y > 0.666) { bandIndex = 0.0; localY = (uvG.y - 0.666) / 0.334; }
-        else if (uvG.y > 0.333) { bandIndex = 1.0; localY = (uvG.y - 0.333) / 0.333; }
-        else { bandIndex = 2.0; localY = (uvG.y) / 0.333; }
-        localY = clamp(localY, 0.0, 1.0);
-      }
-
-      float bandHpx   = uSliceH * 0.25;
-      float sliceV0px = uSliceIndex * uSliceH;
-      float bandV0px  = sliceV0px + bandIndex * bandHpx;
-
-      float yR = (bandV0px + clamp(uvR.y,0.0,1.0)*bandHpx) / uAtlasH;
-      float yG = (bandV0px + localY*bandHpx) / uAtlasH;
-      float yB = (bandV0px + clamp(uvB.y,0.0,1.0)*bandHpx) / uAtlasH;
-
-      vec2 stR = vec2(clamp(uvR.x, 0.0, 1.0), yR);
-      vec2 stG = vec2(clamp(uvG.x, 0.0, 1.0), yG);
-      vec2 stB = vec2(clamp(uvB.x, 0.0, 1.0), yB);
-
-      vec3 col;
-      col.r = texture2D(uAtlas, stR).r;
-      col.g = texture2D(uAtlas, stG).g;
-      col.b = texture2D(uAtlas, stB).b;
-
-      if (uColorMode == 1) {
-        float lum = dot(col, vec3(0.2126,0.7152,0.0722));
-        col = vec3(lum, lum*lum, pow(lum, 0.5));
-      } else if (uColorMode == 2) {
-        col = 1.0 - col.bgr;
-      }
-
-      if (uLayerMode == 1) {
-        float lum = dot(col, vec3(0.2126,0.7152,0.0722));
-        col = vec3(lum);
-        col *= (0.8 + 1.6*m);
-      }
-
-      float g = hash21(gl_FragCoord.xy + t*60.0) - 0.5;
-      col += g * (0.02 + 0.06*m);
-
-      float vig = smoothstep(0.95, 0.25, r);
-      col *= (0.65 + 0.55*vig);
-
-      float fog = smoothstep(1.0, 10.0, vDepth);
-      col *= (1.0 - 0.75*fog);
-
-      col *= uGain;
-
-      float a = mix(0.45, 0.07, depthFactor);
-      a *= (0.65 + 0.55*vig);
-      a *= (0.65 + 0.9*m);
-      if (uLayerMode == 1) a *= 0.85;
-
-      col = tonemap(col);
-      gl_FragColor = vec4(col, a);
-    }
-  `
-});
-
-shelvesMat.blending = THREE.AdditiveBlending;
-shelvesMat.side = THREE.DoubleSide;
-
-/* ---------- Shelves ---------- */
-const shelvesGroup = new THREE.Group();
-scene.add(shelvesGroup);
-let shelvesEnabled = true;
-
-function rebuildShelves(){
-  while (shelvesGroup.children.length) shelvesGroup.remove(shelvesGroup.children[0]);
-
-  baseUniforms.uSlices.value = slices;
-
-  const aspect = atlasW / baseSliceH;
-  const w = 1.5 * aspect;
-  const h = 1.5;
-  const geo = new THREE.PlaneGeometry(w, h, 1, 1);
-
-  const count = slices;
-  for (let i=0; i<count; i++){
-    const mFront = shelvesMat.clone();
-    mFront.uniforms = THREE.UniformsUtils.clone(baseUniforms);
-    mFront.uniforms.uSliceIndex.value = i;
-    mFront.uniforms.uLayerMode.value = 0;
-
-    const front = new THREE.Mesh(geo, mFront);
-
-    const k = i / Math.max(count-1,1);
-    const z = -lerp(0.2, 8.8, k);
-    const bend = (k - 0.5);
-    front.position.set(
-      0.55 * Math.sin(bend * 2.2),
-      0.12 * Math.sin(bend * 3.0),
-      z
-    );
-    front.rotation.y = 0.25 * Math.sin(bend * 2.0);
-    front.rotation.x = 0.10 * Math.sin(bend * 1.7);
-    front.scale.setScalar(lerp(1.04, 0.78, k));
-    shelvesGroup.add(front);
-
-    const mDiff = shelvesMat.clone();
-    mDiff.uniforms = THREE.UniformsUtils.clone(baseUniforms);
-    mDiff.uniforms.uSliceIndex.value = i;
-    mDiff.uniforms.uLayerMode.value = 1;
-    mDiff.uniforms.uGain.value = 1.35;
-
-    const back = new THREE.Mesh(geo, mDiff);
-    back.position.copy(front.position);
-    back.rotation.copy(front.rotation);
-    back.scale.copy(front.scale);
-    back.position.z -= 0.18;
-    back.scale.multiplyScalar(1.02);
-    shelvesGroup.add(back);
-  }
-}
-
-/* ---------- Tesseract ---------- */
-let tesseractEnabled = true;
-function tesseractVertices4D(){
-  const vs = [];
-  for (let x of [-1,1])
-  for (let y of [-1,1])
-  for (let z of [-1,1])
-  for (let w of [-1,1]) vs.push(new THREE.Vector4(x,y,z,w));
-  return vs;
-}
-const V4 = tesseractVertices4D();
-const edges = [];
-for (let i=0; i<V4.length; i++){
-  for (let j=i+1; j<V4.length; j++){
-    let d = 0;
-    d += (V4[i].x !== V4[j].x) ? 1 : 0;
-    d += (V4[i].y !== V4[j].y) ? 1 : 0;
-    d += (V4[i].z !== V4[j].z) ? 1 : 0;
-    d += (V4[i].w !== V4[j].w) ? 1 : 0;
-    if (d === 1) edges.push([i,j]);
-  }
-}
-const linePositions = new Float32Array(edges.length * 2 * 3);
-const lineGeo = new THREE.BufferGeometry();
-lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
-const lineMat = new THREE.LineBasicMaterial({ transparent:true, opacity:0.65 });
-const tesseractLines = new THREE.LineSegments(lineGeo, lineMat);
-tesseractLines.position.set(0, 0.1, -1.2);
-scene.add(tesseractLines);
-
-function rot4(a, b, theta, v){
-  const c = Math.cos(theta), s = Math.sin(theta);
-  const out = v.clone();
-  const va = v.getComponent(a);
-  const vb = v.getComponent(b);
-  out.setComponent(a, c*va - s*vb);
-  out.setComponent(b, s*va + c*vb);
-  return out;
-}
-function project4Dto3D(v4, wDist=3.2){
-  const w = v4.w;
-  const k = wDist / (wDist - w);
-  return new THREE.Vector3(v4.x*k, v4.y*k, v4.z*k);
-}
-function updateTesseract(t, m){
-  const a = 0.65 + 1.65*m;
-  const b = 0.35 + 1.15*m;
-  const pts3 = V4.map(v=>{
-    let r = v.clone();
-    r = rot4(0,3, t*0.53*a, r);
-    r = rot4(1,3, t*0.41*b, r);
-    r = rot4(2,3, t*0.37*a, r);
-    r = rot4(0,1, t*0.27, r);
-    r = rot4(1,2, t*0.19, r);
-    return project4Dto3D(r, 3.0 + 0.8*Math.sin(t*0.6));
-  });
-  let k = 0;
-  for (const [i,j] of edges){
-    const p = pts3[i], q = pts3[j];
-    linePositions[k++] = p.x; linePositions[k++] = p.y; linePositions[k++] = p.z;
-    linePositions[k++] = q.x; linePositions[k++] = q.y; linePositions[k++] = q.z;
-  }
-  lineGeo.attributes.position.needsUpdate = true;
-  tesseractLines.scale.setScalar(0.68 + 0.35*m);
-  lineMat.opacity = 0.25 + 0.55*(0.35 + m);
-}
-
-/* ---------- Dust ---------- */
-let dustEnabled = true;
-const dustCount = 1800;
-const dustGeo = new THREE.BufferGeometry();
-const dustPos = new Float32Array(dustCount*3);
-const dustVel = new Float32Array(dustCount*3);
-for (let i=0; i<dustCount; i++){
-  dustPos[i*3+0] = (Math.random()*2-1) * 6;
-  dustPos[i*3+1] = (Math.random()*2-1) * 3.5;
-  dustPos[i*3+2] = -Math.random() * 10;
-  dustVel[i*3+0] = (Math.random()*2-1) * 0.003;
-  dustVel[i*3+1] = (Math.random()*2-1) * 0.003;
-  dustVel[i*3+2] = 0.012 + Math.random()*0.01;
-}
-dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
-const dustMat = new THREE.PointsMaterial({ size: 0.012, transparent:true, opacity:0.35 });
-const dust = new THREE.Points(dustGeo, dustMat);
-scene.add(dust);
-
-function updateDust(m){
-  for (let i=0; i<dustCount; i++){
-    let x = dustPos[i*3+0], y = dustPos[i*3+1], z = dustPos[i*3+2];
-    const vx = dustVel[i*3+0];
-    const vy = dustVel[i*3+1];
-    const vz = dustVel[i*3+2] * (0.6 + 1.8*m);
-    x += vx * (0.6 + 2.2*m);
-    y += vy * (0.6 + 2.2*m);
-    z += vz;
-    x += -x * (0.00006 + 0.00022*m);
-    y += -y * (0.00006 + 0.00022*m);
-    if (z > 1.8){
-      z = -10 - Math.random()*5;
-      x = (Math.random()*2-1) * 6;
-      y = (Math.random()*2-1) * 3.5;
-    }
-    dustPos[i*3+0] = x; dustPos[i*3+1] = y; dustPos[i*3+2] = z;
-  }
-  dustGeo.attributes.position.needsUpdate = true;
-  dustMat.opacity = 0.10 + 0.35*(0.35 + m);
-}
-
-/* ---------- Feed ---------- */
-let currentTags = document.getElementById('tags').value.trim();
-let feedQueue = [];
-let inFlightFetch = false;
-let stats = { inserted:0, loaded:0, failed:0, noise:0 };
-
-async function refillQueue(){
-  if (inFlightFetch) return;
-  inFlightFetch = true;
-  setStatus('fetching feed…');
-  try{
-    const data = await fetchFlickrPublicFeed(currentTags);
-    const urls = (data?.items || []).map(it => it?.media?.m).filter(Boolean);
-    for (let i = urls.length - 1; i > 0; i--){
-      const j = Math.floor(Math.random() * (i + 1));
-      [urls[i], urls[j]] = [urls[j], urls[i]];
-    }
-    feedQueue = urls;
-    toast(`Flickr feed: ${feedQueue.length} items`);
-  }catch(e){
-    console.error(e);
-    toast('Flickr feed failed (fallback continues)');
-    feedQueue = [];
-  }finally{
-    inFlightFetch = false;
-    setStatus(`queue:${feedQueue.length} | inserted:${stats.inserted} loaded:${stats.loaded} failed:${stats.failed} noise:${stats.noise}`);
-  }
-}
-
-async function nextPhoto(useProxy){
-  if (feedQueue.length < 6) refillQueue();
-  const url = feedQueue.shift();
-  if (!url) return null;
-  try{
-    const img = await loadImage(url, useProxy);
-    stats.loaded++;
-    return { img, url };
-  }catch(e){
-    stats.failed++;
-    console.warn('Image failed:', url, e);
-    return null;
-  }
-}
-
-/* ---------- Insert ---------- */
-let intervalSec = 4.0;
-let lastInsertT = -999;
-let running = true;
-let inserting = false;
-
-async function insertFromFlickr(t){
-  if (inserting) return;
-  inserting = true;
-
-  const useProxy = document.getElementById('proxy').checked;
-  const octx = origC.getContext('2d', { willReadFrequently:true });
-
-  let payload = null;
-  for (let tries=0; tries<6; tries++){
-    payload = await nextPhoto(useProxy);
-    if (payload && payload.img) break;
-  }
-
-  if (payload && payload.img){
-    drawImageCover(octx, payload.img);
-    stats.inserted++;
-    toast('Flickr inserted ✓');
-  } else {
-    genFallbackNoise(octx, t);
-    stats.noise++;
-    stats.inserted++;
-    toast('Fallback inserted ✓');
-  }
-
-  buildLayersFromOrig();
-  insertTopShelf();
-
-  atlasTex.needsUpdate = true;
-  updateAtlasPreview();
-
-  motionPulse = 1.0;
-  setStatus(`queue:${feedQueue.length} | inserted:${stats.inserted} loaded:${stats.loaded} failed:${stats.failed} noise:${stats.noise}`);
-  inserting = false;
-}
-
-/* ---------- start ---------- */
-rebuildShelves();
-
-/* warm start */
-{
-  const t = performance.now()*0.001;
-  const pctx2 = prevC.getContext('2d', { willReadFrequently:true });
-  genFallbackNoise(pctx2, t);
-  const octx = origC.getContext('2d', { willReadFrequently:true });
-  genFallbackNoise(octx, t);
-  buildLayersFromOrig();
-  insertTopShelf();
-  atlasTex.needsUpdate = true;
-  updateAtlasPreview();
-}
-
-refillQueue();
-
-/* ---------- loop ---------- */
-let last = performance.now();
-function animate(now){
-  const t = now * 0.001;
-  const dt = Math.min(0.05, (now - last) / 1000);
-  last = now;
-
-  if (lastInsertT < -100){
-    insertFromFlickr(t);
-    lastInsertT = t;
-  }
-  if (running && (t - lastInsertT >= intervalSec)){
-    insertFromFlickr(t);
-    lastInsertT = t;
-  }
-
-  motionPulse = Math.max(0, motionPulse - dt * 0.55);
-  motion = clamp(0.10 + 0.65*motionPulse + 0.10*Math.sin(t*0.7), 0, 1);
-
-  shelvesGroup.traverse(obj=>{
-    if (obj.isMesh && obj.material && obj.material.uniforms){
-      obj.material.uniforms.uTime.value = t;
-      obj.material.uniforms.uMotion.value = motion;
-      obj.material.uniforms.uColorMode.value = colorMode;
-      obj.material.uniforms.uSlices.value = slices;
-    }
-  });
-
-  shelvesGroup.rotation.y = 0.06 * Math.sin(t*0.4);
-  shelvesGroup.rotation.x = 0.03 * Math.sin(t*0.33);
-  shelvesGroup.position.y = 0.03 * Math.sin(t*0.25);
-
-  if (tesseractEnabled) updateTesseract(t, motion);
-  tesseractLines.visible = tesseractEnabled;
-
-  if (dustEnabled) updateDust(motion);
-  dust.visible = dustEnabled;
-
-  shelvesGroup.visible = shelvesEnabled;
-
-  scene.fog.density = 0.035 + 0.03 * motion;
-
-  controls.update();
-  renderer.render(scene, camera);
-  requestAnimationFrame(animate);
-}
-requestAnimationFrame(animate);
-
-/* ---------- UI ---------- */
-document.getElementById('apply').addEventListener('click', async ()=>{
-  currentTags = document.getElementById('tags').value.trim() || 'space,nebula,night';
-  feedQueue = [];
-  toast('Loading Flickr…');
-  await refillQueue();
-});
-
-document.getElementById('pause').addEventListener('click', ()=>{
-  running = !running;
-  document.getElementById('pause').textContent = running ? 'Pause' : 'Resume';
-  toast(running ? 'Running' : 'Paused');
-});
+controls.dampingFactor = 0.08;
 
 addEventListener('resize', ()=>{
   camera.aspect = innerWidth/innerHeight;
@@ -884,7 +156,55 @@ addEventListener('resize', ()=>{
   renderer.setSize(innerWidth, innerHeight);
 });
 
+// ===========================================================
+// 1) Fixed atlas params (keep stable, avoid GPU max mismatch)
+// ===========================================================
+const ATLAS_W = 2048;
+const ATLAS_H = 8192; // fixed for stability
+atlasHEl.textContent = String(ATLAS_H);
+
+// 4 layers baked vertically per shelf snapshot
+const LAYERS = 4;
+const baseSliceH = 288; // per layer base height
+const sliceH = baseSliceH * LAYERS;
+
+// user desired shelves count (clamped to atlas capacity)
+let requestedSlices = 36;
+let maxSlices = Math.max(4, Math.floor(ATLAS_H / sliceH));
+let slices = Math.min(requestedSlices, maxSlices);
+reqSlicesEl.textContent = String(requestedSlices);
+usedSlicesEl.textContent = String(slices);
+
+if (requestedSlices > maxSlices){
+  toast(`GPU atlasH fixed. Slices clamped to ${maxSlices}.`);
+}
+
+// ===========================================================
+// 2) UI controls
+// ===========================================================
+const tagsInput = document.getElementById('tags');
+const applyBtn  = document.getElementById('apply');
+const pauseBtn  = document.getElementById('pause');
+const proxyChk  = document.getElementById('proxy');
 const hud = document.getElementById('hud');
+
+applyBtn.onclick = ()=> {
+  currentTags = tagsInput.value.trim() || 'space,nebula,night';
+  toast("Tags applied: " + currentTags);
+  setStatus("tags applied");
+};
+let paused = false;
+pauseBtn.onclick = ()=> {
+  paused = !paused;
+  pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+  toast(paused ? "Paused" : "Resumed");
+};
+
+let mirror = false;
+let colorMode = 0; // 0..2
+let atlasPreviewOn = false;
+const atlasPreview = document.getElementById('atlasPreview');
+
 addEventListener('keydown', (e)=>{
   const k = e.key.toLowerCase();
   if (k === 'h'){
@@ -900,10 +220,16 @@ addEventListener('keydown', (e)=>{
     mirror = !mirror;
     toast("Mirror: " + (mirror ? "ON" : "OFF"));
   }
+  if (k === 'b'){
+    additiveBlend = !additiveBlend;
+    applyShelfBlending();
+    toast("Shelf blend: " + (additiveBlend ? "Additive" : "Normal"));
+  }
   if (k === 'c'){
     colorMode = (colorMode + 1) % 3;
     toast("Color mode: " + colorMode);
   }
+
   if (k === 'a'){
     atlasPreviewOn = !atlasPreviewOn;
     atlasPreview.style.display = atlasPreviewOn ? 'block' : 'none';
@@ -936,6 +262,558 @@ addEventListener('keydown', (e)=>{
   if (k === '2'){ tesseractEnabled = !tesseractEnabled; toast("Tesseract: " + (tesseractEnabled?"ON":"OFF")); }
   if (k === '3'){ dustEnabled = !dustEnabled; toast("Dust: " + (dustEnabled?"ON":"OFF")); }
 });
+
+// ===========================================================
+// 3) Atlas texture + CPU painter
+// ===========================================================
+const atlasCanvas = document.createElement('canvas');
+atlasCanvas.width = ATLAS_W;
+atlasCanvas.height = ATLAS_H;
+const atlasCtx = atlasCanvas.getContext('2d', { willReadFrequently:false });
+
+atlasCtx.fillStyle = 'black';
+atlasCtx.fillRect(0,0,ATLAS_W,ATLAS_H);
+
+const atlasTex = new THREE.CanvasTexture(atlasCanvas);
+atlasTex.minFilter = THREE.LinearFilter;
+atlasTex.magFilter = THREE.LinearFilter;
+atlasTex.wrapS = atlasTex.wrapT = THREE.ClampToEdgeWrapping;
+
+function updateAtlasPreview(){
+  if (!atlasPreviewOn) return;
+  atlasPreview.src = atlasCanvas.toDataURL('image/png');
+}
+
+// ===========================================================
+// 4) Helpers: image processing
+// ===========================================================
+function makeCanvas(w,h){
+  const c = document.createElement('canvas');
+  c.width=w; c.height=h;
+  return c;
+}
+
+// edge map (simple sobel-ish)
+function edgeDetect(srcCtx, w, h){
+  const out = makeCanvas(w,h);
+  const octx = out.getContext('2d');
+  const img = srcCtx.getImageData(0,0,w,h);
+  const d = img.data;
+  const g = new Float32Array(w*h);
+  for(let i=0;i<w*h;i++){
+    const r=d[i*4], gg=d[i*4+1], b=d[i*4+2];
+    g[i] = 0.2126*r + 0.7152*gg + 0.0722*b;
+  }
+  const outImg = octx.createImageData(w,h);
+  const od = outImg.data;
+  const kx = [-1,0,1,-2,0,2,-1,0,1];
+  const ky = [-1,-2,-1,0,0,0,1,2,1];
+  for(let y=1;y<h-1;y++){
+    for(let x=1;x<w-1;x++){
+      let sx=0, sy=0;
+      let idx=0;
+      for(let j=-1;j<=1;j++){
+        for(let i=-1;i<=1;i++){
+          const v = g[(y+j)*w + (x+i)];
+          sx += v * kx[idx];
+          sy += v * ky[idx];
+          idx++;
+        }
+      }
+      const mag = Math.min(255, Math.sqrt(sx*sx+sy*sy));
+      const o = (y*w+x)*4;
+      od[o]=od[o+1]=od[o+2]=mag;
+      od[o+3]=255;
+    }
+  }
+  octx.putImageData(outImg,0,0);
+  return out;
+}
+
+// simple blur
+function blurCanvas(src, radius){
+  const w=src.width, h=src.height;
+  const tmp = makeCanvas(w,h);
+  const tctx = tmp.getContext('2d');
+  const o = makeCanvas(w,h);
+  const octx = o.getContext('2d');
+  tctx.filter = `blur(${radius}px)`;
+  tctx.drawImage(src,0,0);
+  octx.drawImage(tmp,0,0);
+  return o;
+}
+
+// high-pass: src - blur
+function highPass(src, blurPx){
+  const w=src.width, h=src.height;
+  const b = blurCanvas(src, blurPx);
+  const out = makeCanvas(w,h);
+  const octx = out.getContext('2d');
+  const sctx = src.getContext('2d');
+  const bctx = b.getContext('2d');
+  const si = sctx.getImageData(0,0,w,h);
+  const bi = bctx.getImageData(0,0,w,h);
+  const od = octx.createImageData(w,h);
+  for(let i=0;i<w*h;i++){
+    const o=i*4;
+    for(let c=0;c<3;c++){
+      const v = si.data[o+c] - bi.data[o+c] + 128;
+      od.data[o+c] = clamp(v,0,255);
+    }
+    od.data[o+3]=255;
+  }
+  octx.putImageData(od,0,0);
+  return out;
+}
+
+// diff = abs(curr - prev)
+function diffCanvas(a, b){
+  const w=a.width, h=a.height;
+  const out = makeCanvas(w,h);
+  const octx = out.getContext('2d');
+  const actx = a.getContext('2d');
+  const bctx = b.getContext('2d');
+  const ai = actx.getImageData(0,0,w,h);
+  const bi = bctx.getImageData(0,0,w,h);
+  const od = octx.createImageData(w,h);
+  for(let i=0;i<w*h;i++){
+    const o=i*4;
+    for(let c=0;c<3;c++){
+      od.data[o+c] = Math.abs(ai.data[o+c] - bi.data[o+c]);
+    }
+    od.data[o+3]=255;
+  }
+  octx.putImageData(od,0,0);
+  return out;
+}
+
+// fallback noise
+function genFallbackNoise(w,h, seed=0){
+  const c = makeCanvas(w,h);
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(w,h);
+  let s = (seed*1664525 + 1013904223)>>>0;
+  for(let i=0;i<w*h;i++){
+    s = (s*1664525 + 1013904223)>>>0;
+    const v = (s>>>24);
+    const o=i*4;
+    img.data[o] = v;
+    img.data[o+1] = (v*0.6)|0;
+    img.data[o+2] = (255-v);
+    img.data[o+3] = 255;
+  }
+  ctx.putImageData(img,0,0);
+  return c;
+}
+
+// ===========================================================
+// 5) Flickr fetch (proxy option)
+// ===========================================================
+let currentTags = tagsInput.value.trim() || 'space,nebula,night';
+
+// NOTE: Replace this with your own Flickr API key if needed.
+// The code keeps running with fallback noise if fetching fails.
+const FLICKR_API_KEY = ""; // optional
+const FLICKR_ENDPOINT = "https://www.flickr.com/services/rest/";
+
+async function fetchFlickrPhotoUrl(tags){
+  // If no key, force fallback
+  if (!FLICKR_API_KEY){
+    return null;
+  }
+  const params = new URLSearchParams({
+    method: "flickr.photos.search",
+    api_key: FLICKR_API_KEY,
+    tags,
+    tag_mode: "all",
+    per_page: "50",
+    page: String(1 + Math.floor(Math.random()*6)),
+    content_type: "1",
+    media: "photos",
+    safe_search: "1",
+    sort: "relevance",
+    format: "json",
+    nojsoncallback: "1"
+  });
+  const url = `${FLICKR_ENDPOINT}?${params.toString()}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("Flickr API failed");
+  const j = await r.json();
+  const photos = j?.photos?.photo || [];
+  if (!photos.length) return null;
+  const p = photos[Math.floor(Math.random()*photos.length)];
+  // Construct a source URL (use "z" size)
+  // https://live.staticflickr.com/{server-id}/{id}_{secret}_{size-suffix}.jpg
+  return `https://live.staticflickr.com/${p.server}/${p.id}_${p.secret}_z.jpg`;
+}
+
+function viaProxy(u){
+  // Use images.weserv.nl as a simple open proxy for CORS. (Not guaranteed forever)
+  const enc = encodeURIComponent(u);
+  return `https://images.weserv.nl/?url=${enc.replace(/^https%3A%2F%2F/, "")}&default=black&output=jpg`;
+}
+
+async function loadImage(url){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = ()=>resolve(img);
+    img.onerror = (e)=>reject(e);
+    img.src = url;
+  });
+}
+
+// ===========================================================
+// 6) Build shelf slices into atlas
+// ===========================================================
+const sliceW = ATLAS_W;
+const layerH = baseSliceH;
+
+let shelfHead = 0; // rolling insert idx
+let prevBase = genFallbackNoise(sliceW, layerH, 1);
+let currBase = genFallbackNoise(sliceW, layerH, 2);
+
+function bakeIntoAtlas(sliceIndex, canv_edge, canv_low, canv_high, canv_diff){
+  const y0 = sliceIndex * sliceH;
+  atlasCtx.save();
+  atlasCtx.globalCompositeOperation = 'source-over';
+  atlasCtx.drawImage(canv_edge, 0, y0 + 0*layerH, sliceW, layerH);
+  atlasCtx.drawImage(canv_low,  0, y0 + 1*layerH, sliceW, layerH);
+  atlasCtx.drawImage(canv_high, 0, y0 + 2*layerH, sliceW, layerH);
+  atlasCtx.drawImage(canv_diff, 0, y0 + 3*layerH, sliceW, layerH);
+  atlasCtx.restore();
+}
+
+function buildLayersFromBase(baseCanvas){
+  const w = baseCanvas.width, h = baseCanvas.height;
+  const base = makeCanvas(w,h);
+  base.getContext('2d').drawImage(baseCanvas,0,0,w,h);
+
+  const edge = edgeDetect(base.getContext('2d'), w, h);
+  const low  = blurCanvas(base, 8);
+  const high = highPass(base, 10);
+  const diff = diffCanvas(base, prevBase);
+
+  return { edge, low, high, diff };
+}
+
+function pushNewCapture(baseCanvas){
+  const sliceIndex = shelfHead % slices;
+  currBase = baseCanvas;
+  const L = buildLayersFromBase(currBase);
+
+  bakeIntoAtlas(sliceIndex, L.edge, L.low, L.high, L.diff);
+
+  prevBase = currBase;
+  shelfHead++;
+
+  atlasTex.needsUpdate = true;
+  updateAtlasPreview();
+}
+
+// ===========================================================
+// 7) Shelves shader + geometry
+// ===========================================================
+const baseUniforms = {
+  uAtlas: { value: atlasTex },
+  uTime: { value: 0 },
+  uSlices: { value: slices },
+  uSliceH: { value: sliceH },
+  uAtlasH: { value: ATLAS_H },
+  uColorMode: { value: 0 },
+  uMirror: { value: 0 },
+  uLayerMode: { value: 0 }
+};
+
+const shelvesMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  uniforms: baseUniforms,
+  vertexShader: `
+    varying vec2 vUv;
+    varying float vDepth;
+    void main(){
+      vUv = uv;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      vDepth = -mv.z;
+      gl_Position = projectionMatrix * mv;
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+
+    uniform sampler2D uAtlas;
+    uniform float uTime;
+    uniform float uSlices;
+    uniform float uSliceH;
+    uniform float uAtlasH;
+    uniform float uColorMode;
+    uniform float uMirror;
+
+    varying vec2 vUv;
+    varying float vDepth;
+
+    vec3 tonemap(vec3 c){
+      c = c / (c + vec3(1.0));
+      return pow(c, vec3(1.0/2.2));
+    }
+
+    void main(){
+      // shelf index along "time" (z-depth illusion via vUv.y)
+      float sliceF = floor(vUv.y * uSlices);
+      float sliceT = fract(vUv.y * uSlices);
+
+      // each shelf uses 4 stacked layers within sliceH:
+      // 0 edge, 1 low, 2 high, 3 diff
+      float layerF = floor(sliceT * 4.0);
+      float layerT = fract(sliceT * 4.0);
+
+      // map to atlas UV
+      float y = (sliceF * uSliceH + layerF * (uSliceH/4.0) + layerT * (uSliceH/4.0)) / uAtlasH;
+      vec2 uv = vec2(vUv.x, y);
+
+      if (uMirror > 0.5) uv.x = 1.0 - uv.x;
+
+      vec3 col = texture2D(uAtlas, uv).rgb / 255.0;
+
+      // subtle motion (drift)
+      float drift = sin(uTime*0.33 + sliceF*0.47) * 0.004;
+      vec2 uv2 = uv + vec2(drift, 0.0);
+      vec3 col2 = texture2D(uAtlas, uv2).rgb / 255.0;
+      col = mix(col, col2, 0.35);
+
+      // layer weighting (make edges glow etc.)
+      float w = 1.0;
+      if (layerF < 0.5) w = 1.6;          // edge
+      else if (layerF < 1.5) w = 1.05;    // low
+      else if (layerF < 2.5) w = 1.2;     // high
+      else w = 1.8;                       // diff
+
+      // distance fade
+      float fade = exp(-vDepth * 0.22);
+
+      // vignette (FIXED): smoothstep args must be in ascending order.
+      vec2 p = vUv*2.0-1.0;
+      float r = length(p);
+      float vig = 1.0 - smoothstep(0.25, 0.95, r);
+      vig = clamp(vig, 0.0, 1.0);
+
+      // color modes
+      if (uColorMode > 1.5){
+        // monochrome + bloom bias
+        float g = dot(col, vec3(0.2126,0.7152,0.0722));
+        col = vec3(g);
+      } else if (uColorMode > 0.5){
+        // spectral shift
+        col = col.bgr;
+      }
+
+      col *= w * fade * (0.35 + 0.65*vig);
+
+      // alpha shaped by layer and depth
+      float a = 0.38 * fade * (0.25 + 0.75*vig);
+      if (layerF < 0.5) a *= 0.85;
+      else if (layerF > 2.5) a *= 0.9;
+
+      col = tonemap(col * 2.2);
+
+      gl_FragColor = vec4(col, a);
+    }
+  `
+});
+
+let additiveBlend = true;
+function applyShelfBlending(){
+  shelvesMat.blending = additiveBlend ? THREE.AdditiveBlending : THREE.NormalBlending;
+  shelvesMat.needsUpdate = true;
+}
+applyShelfBlending();
+shelvesMat.side = THREE.DoubleSide;
+
+// shelves geometry (a stack of thin planes)
+let shelvesGroup = new THREE.Group();
+scene.add(shelvesGroup);
+
+function rebuildShelves(){
+  scene.remove(shelvesGroup);
+  shelvesGroup.traverse(obj=>{
+    if (obj.geometry) obj.geometry.dispose();
+  });
+  shelvesGroup = new THREE.Group();
+  scene.add(shelvesGroup);
+
+  const count = slices;
+  const radius = 1.15;
+  const height = 2.3;
+  for(let i=0;i<count;i++){
+    const g = new THREE.PlaneGeometry(3.2, height, 1, 1);
+    const m = shelvesMat;
+    const mesh = new THREE.Mesh(g, m);
+    // distribute along z and rotate slightly to feel like "shelves"
+    const t = i/(count-1);
+    const z = lerp(-2.2, 2.2, t);
+    const ang = lerp(-0.38, 0.38, t);
+    mesh.position.set(Math.sin(ang)*radius, 0, z);
+    mesh.rotation.y = ang;
+    // use UV.y to encode slice index via geometry mapping:
+    // we map plane's vUv.y by translating UVs per mesh index
+    const uv = g.attributes.uv;
+    for(let k=0;k<uv.count;k++){
+      const uy = uv.getY(k);
+      const newY = (i + uy) / count;
+      uv.setY(k, newY);
+    }
+    uv.needsUpdate = true;
+    shelvesGroup.add(mesh);
+  }
+}
+rebuildShelves();
+
+// ===========================================================
+// 8) Tesseract: subtle center object
+// ===========================================================
+const tesseractGroup = new THREE.Group();
+scene.add(tesseractGroup);
+
+function makeLineBox(size){
+  const geo = new THREE.BoxGeometry(size,size,size);
+  const edges = new THREE.EdgesGeometry(geo);
+  const mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent:true, opacity:0.38 });
+  const line = new THREE.LineSegments(edges, mat);
+  return line;
+}
+const box1 = makeLineBox(1.05);
+const box2 = makeLineBox(0.68);
+box2.position.set(0.15,0.08,0.10);
+tesseractGroup.add(box1, box2);
+
+const bridgeMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent:true, opacity:0.20 });
+const bridgeGeo = new THREE.BufferGeometry();
+const bridgePts = [];
+function pushBridge(a,b){
+  bridgePts.push(a.x,a.y,a.z, b.x,b.y,b.z);
+}
+const corners1 = [
+  new THREE.Vector3(-0.525,-0.525,-0.525),
+  new THREE.Vector3( 0.525,-0.525,-0.525),
+  new THREE.Vector3( 0.525, 0.525,-0.525),
+  new THREE.Vector3(-0.525, 0.525,-0.525),
+  new THREE.Vector3(-0.525,-0.525, 0.525),
+  new THREE.Vector3( 0.525,-0.525, 0.525),
+  new THREE.Vector3( 0.525, 0.525, 0.525),
+  new THREE.Vector3(-0.525, 0.525, 0.525),
+];
+const corners2 = corners1.map(v=>v.clone().multiplyScalar(0.68/1.05).add(new THREE.Vector3(0.15,0.08,0.10)));
+for(let i=0;i<8;i++) pushBridge(corners1[i], corners2[i]);
+bridgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(bridgePts, 3));
+const bridge = new THREE.LineSegments(bridgeGeo, bridgeMat);
+tesseractGroup.add(bridge);
+
+tesseractGroup.position.set(0,0,0);
+tesseractGroup.rotation.set(0.08,0.0,0.0);
+
+// ===========================================================
+// 9) Dust / particles
+// ===========================================================
+const dustGeo = new THREE.BufferGeometry();
+const N = 1200;
+const pos = new Float32Array(N*3);
+for(let i=0;i<N;i++){
+  pos[i*3+0] = (Math.random()-0.5)*12;
+  pos[i*3+1] = (Math.random()-0.5)*8;
+  pos[i*3+2] = (Math.random()-0.5)*12;
+}
+dustGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+const dustMat = new THREE.PointsMaterial({ color:0xffffff, size:0.012, transparent:true, opacity:0.25, depthWrite:false });
+const dust = new THREE.Points(dustGeo, dustMat);
+scene.add(dust);
+
+// ===========================================================
+// 10) Capture loop: every 4 seconds, pull Flickr (or fallback) and push into shelf
+// ===========================================================
+let lastCaptureAt = performance.now();
+const CAPTURE_INTERVAL_MS = 4000;
+
+async function captureOnce(){
+  setStatus("capturing…");
+  try{
+    let url = await fetchFlickrPhotoUrl(currentTags);
+    if (!url) throw new Error("No Flickr key or no photos");
+    if (proxyChk.checked) url = viaProxy(url);
+    const img = await loadImage(url);
+
+    // draw into base canvas with cover crop
+    const base = makeCanvas(sliceW, layerH);
+    const ctx = base.getContext('2d');
+    ctx.fillStyle='black';
+    ctx.fillRect(0,0,sliceW,layerH);
+
+    // cover crop
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+    const s = Math.max(sliceW/iw, layerH/ih);
+    const dw = iw*s, dh = ih*s;
+    const dx = (sliceW - dw)/2;
+    const dy = (layerH - dh)/2;
+    ctx.drawImage(img, dx, dy, dw, dh);
+
+    pushNewCapture(base);
+    setStatus("ok (flickr)");
+  }catch(err){
+    // fallback
+    const seed = (Math.random()*1e9)|0;
+    const base = genFallbackNoise(sliceW, layerH, seed);
+    pushNewCapture(base);
+    setStatus("fallback noise (flickr failed)");
+  }
+}
+
+// warm start: 2 frames
+pushNewCapture(genFallbackNoise(sliceW, layerH, 101));
+pushNewCapture(genFallbackNoise(sliceW, layerH, 202));
+setStatus("running");
+
+// ===========================================================
+// 11) Main animation loop
+// ===========================================================
+let shelvesEnabled = true;
+let tesseractEnabled = true;
+let dustEnabled = true;
+
+let t0 = performance.now();
+function animate(){
+  requestAnimationFrame(animate);
+  const t = (performance.now() - t0) * 0.001;
+
+  controls.update();
+
+  // uniforms
+  baseUniforms.uTime.value = t;
+  baseUniforms.uColorMode.value = colorMode;
+  baseUniforms.uMirror.value = mirror ? 1.0 : 0.0;
+
+  // animate shelves subtle drift
+  shelvesGroup.visible = shelvesEnabled;
+  tesseractGroup.visible = tesseractEnabled;
+  dust.visible = dustEnabled;
+
+  tesseractGroup.rotation.y = t*0.22;
+  tesseractGroup.rotation.x = 0.10 + Math.sin(t*0.4)*0.08;
+
+  dust.rotation.y = t*0.02;
+  dust.position.y = Math.sin(t*0.3)*0.08;
+
+  // periodic capture
+  if (!paused && performance.now() - lastCaptureAt > CAPTURE_INTERVAL_MS){
+    lastCaptureAt = performance.now();
+    captureOnce();
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+toast("Ready — press A for atlas preview");
+
 </script>
 </body>
 </html>
