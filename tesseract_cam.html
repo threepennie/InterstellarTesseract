@@ -3,27 +3,28 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Tesseract Installation — Flickr Shelves</title>
+  <title>Tesseract Installation — Flickr Shelves (Fixed JSONP)</title>
   <style>
     html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#000; }
     #app { position:fixed; inset:0; }
 
-    #hud {
-      position:fixed; left:12px; top:12px; color:#eaeaea;
+    #hud{
+      position:fixed; left:12px; top:12px; z-index:10;
+      color:#eaeaea;
       font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       background: rgba(0,0,0,.45);
       border: 1px solid rgba(255,255,255,.12);
       border-radius: 12px;
       padding: 10px 12px;
-      max-width: min(720px, calc(100vw - 24px));
+      max-width: min(760px, calc(100vw - 24px));
       backdrop-filter: blur(8px);
       user-select:none;
-      z-index: 10;
     }
     #hud b { color:#fff; }
     #hud .row { opacity:.92; }
     #hud .dim { opacity:.65; }
-    #hud input {
+
+    #hud input{
       width: 260px;
       padding: 6px 8px;
       border-radius: 10px;
@@ -33,7 +34,7 @@
       outline: none;
       margin-left: 8px;
     }
-    #hud button {
+    #hud button, #hud label{
       margin-left: 8px;
       padding: 6px 10px;
       border-radius: 10px;
@@ -42,9 +43,20 @@
       color: #fff;
       cursor: pointer;
     }
+    #hud label{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      cursor:pointer;
+    }
+    #hud input[type="checkbox"]{
+      width:auto;
+      margin:0;
+      transform: translateY(1px);
+    }
 
-    #toast {
-      position:fixed; right:12px; bottom:12px;
+    #toast{
+      position:fixed; right:12px; bottom:12px; z-index:20;
       color:#fff; font: 12px ui-monospace, monospace;
       background: rgba(0,0,0,.45);
       border: 1px solid rgba(255,255,255,.12);
@@ -53,49 +65,54 @@
       opacity:0; transform: translateY(6px);
       transition: opacity .25s ease, transform .25s ease;
       pointer-events:none;
-      z-index: 20;
     }
     #toast.show { opacity:1; transform: translateY(0); }
 
     canvas { display:block; }
+    a { color:#cfe4ff; text-decoration:none; }
+    a:hover { text-decoration:underline; }
   </style>
 </head>
 <body>
   <div id="app"></div>
 
   <div id="hud">
-    <div class="row"><b>Tesseract Installation</b> — Flickr → 4s interval → layer-decomposed shelves</div>
-    <div class="row dim">棚（前面）：上=輪郭 / 中=低周波(ぼかし) / 下=高周波(テクスチャ)</div>
-    <div class="row dim">棚（背面）：差分（前回画像との差）</div>
+    <div class="row"><b>Tesseract Installation</b> — Flickr → 4s interval → layer shelves</div>
+    <div class="row dim">上=輪郭 / 中=低周波(ぼかし) / 下=高周波(テクスチャ) / 背面=差分</div>
 
     <div class="row" style="margin-top:8px;">
       Flickr tags:
       <input id="tags" value="space,nebula,night" />
       <button id="apply">Apply</button>
       <button id="pause">Pause</button>
+      <label title="CORSで画像が落ちるときにON（外部プロキシ経由で取得）">
+        <input id="proxy" type="checkbox" checked />
+        Proxy
+      </label>
     </div>
 
     <div class="row dim" style="margin-top:6px;">
-      Mouse: ドラッグ回転 / Wheel: ズーム　Keys: <b>H</b> HUD, <b>F</b> Fullscreen, <b>M</b> Mirror, <b>C</b> Color, <b>[</b>/<b>]</b> slices, <b>1</b> shelves, <b>2</b> tesseract, <b>3</b> dust
+      Status: <span id="status">init…</span>
+    </div>
+
+    <div class="row dim" style="margin-top:6px;">
+      Mouse: drag rotate / Wheel: zoom　
+      Keys: <b>H</b> HUD <b>F</b> Fullscreen <b>M</b> Mirror <b>C</b> Color <b>[</b>/<b>]</b> slices <b>1</b> shelves <b>2</b> tesseract <b>3</b> dust
     </div>
   </div>
 
   <div id="toast"></div>
 
 <script type="module">
-/* ---------------------------------------------------------
-   Imports (NO importmap): works on GitHub Pages + Firefox
---------------------------------------------------------- */
 import * as THREE from 'https://esm.sh/three@0.160.0';
 import { OrbitControls } from 'https://esm.sh/three@0.160.0/examples/jsm/controls/OrbitControls.js';
 
-/* ------------------------------
-   Utils
--------------------------------- */
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const lerp  = (a, b, t) => a + (b - a) * t;
 
 const toastEl = document.getElementById('toast');
+const statusEl = document.getElementById('status');
+function setStatus(s){ statusEl.textContent = s; }
 let toastTimer = 0;
 function toast(msg){
   toastEl.textContent = msg;
@@ -104,59 +121,90 @@ function toast(msg){
   toastTimer = setTimeout(()=> toastEl.classList.remove('show'), 1200);
 }
 
-/* ------------------------------
-   Flickr Public Feed (JSONP, no API key)
-   - tags=comma,separated
-   - returns { items: [ { media: { m: url }, title, author, link, ... }, ... ] }
--------------------------------- */
+/* ---------------------------------------------------------
+   Flickr Public Feed (JSONP)
+   IMPORTANT: callback is hardcoded: jsonFlickrFeed(...)
+--------------------------------------------------------- */
 function fetchFlickrPublicFeed(tags){
   return new Promise((resolve, reject)=>{
-    const cb = `__flickr_cb_${Math.random().toString(36).slice(2)}`;
     const script = document.createElement('script');
+    const url = new URL('https://www.flickr.com/services/feeds/photos_public.gne');
 
-    const clean = (ok, payload)=>{
-      try { delete window[cb]; } catch {}
-      script.remove();
-      ok ? resolve(payload) : reject(payload);
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('tags', tags || 'space,nebula,night');
+    url.searchParams.set('tagmode', 'any');
+
+    // Flickr feed JSONP calls window.jsonFlickrFeed(data)
+    const prev = window.jsonFlickrFeed;
+    let done = false;
+
+    const cleanup = ()=>{
+      if (script.parentNode) script.parentNode.removeChild(script);
+      if (prev) window.jsonFlickrFeed = prev;
+      else try { delete window.jsonFlickrFeed; } catch {}
     };
 
-    window[cb] = (data)=> clean(true, data);
-
-    // public feed supports jsoncallback=...
-    const url = new URL('https://www.flickr.com/services/feeds/photos_public.gne');
-    url.searchParams.set('format', 'json');
-    url.searchParams.set('nojsoncallback', '0'); // keep JSONP
-    url.searchParams.set('jsoncallback', cb);
-    url.searchParams.set('tags', tags || 'space,nebula,night');
+    window.jsonFlickrFeed = (data)=>{
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve(data);
+    };
 
     script.src = url.toString();
-    script.onerror = ()=> clean(false, new Error('Failed to load Flickr feed (script error)'));
+    script.async = true;
+    script.onerror = ()=>{
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new Error('Failed to load Flickr feed (script error)'));
+    };
+
     document.head.appendChild(script);
 
-    // timeout safety
     setTimeout(()=>{
-      if (window[cb]) clean(false, new Error('Flickr feed timeout'));
-    }, 8000);
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new Error('Flickr feed timeout'));
+    }, 9000);
   });
 }
 
-async function loadImage(url){
-  // Try to load with CORS so canvas->WebGL upload stays valid.
+/* ---------------------------------------------------------
+   Image loading (CORS safe)
+   - if CORS fails, onerror -> skip
+   - optional proxy for CORS trouble on staticflickr
+--------------------------------------------------------- */
+function proxify(url){
+  // images.weserv.nl expects url without protocol often
+  const stripped = url.replace(/^https?:\/\//,'');
+  const prox = new URL('https://images.weserv.nl/');
+  prox.searchParams.set('url', stripped);
+  prox.searchParams.set('w', '1280');
+  prox.searchParams.set('fit', 'contain');
+  return prox.toString();
+}
+
+async function loadImage(url, useProxy){
   return new Promise((resolve, reject)=>{
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    img.crossOrigin = 'anonymous'; // keep canvas origin-clean for WebGL upload
+    img.decoding = 'async';
+    img.referrerPolicy = 'no-referrer';
+
     img.onload = ()=> resolve(img);
-    img.onerror = ()=> reject(new Error('Image load failed'));
-    img.src = url;
+    img.onerror = ()=> reject(new Error('Image load failed (CORS or network)'));
+
+    img.src = useProxy ? proxify(url) : url;
   });
 }
 
-/* ------------------------------
-   Atlas: shelves store 4 bands per photo:
-   [0] edge, [1] low-pass blur, [2] high-pass, [3] diff vs previous photo
--------------------------------- */
-let slices = 36;               // number of photos stored
-let intervalSec = 4.0;         // every 4 seconds
+/* ---------------------------------------------------------
+   Atlas & layer decomposition (composite-only, no getImageData)
+--------------------------------------------------------- */
+let slices = 36;
+let intervalSec = 4.0;
 let lastInsertT = -999;
 
 let atlasW = 640;
@@ -171,13 +219,12 @@ const actx = atlas.getContext('2d', { willReadFrequently: true });
 const shiftC = document.createElement('canvas');
 const shiftCtx = shiftC.getContext('2d', { willReadFrequently: true });
 
-// temp canvases for layer processing (NO getImageData route by design)
 const origC = document.createElement('canvas');
 const blurC = document.createElement('canvas');
 const edgeC = document.createElement('canvas');
 const highC = document.createElement('canvas');
 const diffC = document.createElement('canvas');
-const prevC = document.createElement('canvas'); // previous photo for diff
+const prevC = document.createElement('canvas');
 
 function resizeAtlasForAspect(vw, vh){
   atlasW = 640;
@@ -190,7 +237,6 @@ function resizeAtlasForAspect(vw, vh){
   actx.fillStyle = '#000';
   actx.fillRect(0,0,atlasW,atlasH);
 
-  // shift buffer holds atlas excluding top shelf
   shiftC.width = atlasW;
   shiftC.height = Math.max(1, atlasH - sliceH);
 
@@ -202,7 +248,6 @@ function resizeAtlasForAspect(vw, vh){
 
 resizeAtlasForAspect(16, 9);
 
-/* draw image into origC with cover-crop */
 let mirror = true;
 function drawImageCover(ctx, img){
   const cw = atlasW, ch = baseSliceH;
@@ -240,9 +285,7 @@ function genFallbackNoise(ctx, t){
   ctx.putImageData(img, 0, 0);
 }
 
-/* layer decomposition using composite-only (no pixel reads) */
-function buildLayersFromOrig(t){
-  const octx = origC.getContext('2d', { willReadFrequently:true });
+function buildLayersFromOrig(){
   const bctx = blurC.getContext('2d', { willReadFrequently:true });
   const ectx = edgeC.getContext('2d', { willReadFrequently:true });
   const hctx = highC.getContext('2d', { willReadFrequently:true });
@@ -256,7 +299,7 @@ function buildLayersFromOrig(t){
   bctx.drawImage(origC, 0, 0);
   bctx.restore();
 
-  // edge (pseudo): difference of shifted copies
+  // edge pseudo
   ectx.save();
   ectx.clearRect(0,0,atlasW,baseSliceH);
   ectx.filter = 'contrast(280%)';
@@ -268,7 +311,7 @@ function buildLayersFromOrig(t){
   ectx.globalCompositeOperation = 'source-over';
   ectx.restore();
 
-  // high-pass: gray then difference(orig, blur)
+  // high-pass pseudo
   hctx.save();
   hctx.clearRect(0,0,atlasW,baseSliceH);
   hctx.filter = 'contrast(190%) brightness(110%)';
@@ -281,7 +324,7 @@ function buildLayersFromOrig(t){
   hctx.globalCompositeOperation = 'source-over';
   hctx.restore();
 
-  // diff vs previous photo
+  // diff vs previous
   dctx.save();
   dctx.clearRect(0,0,atlasW,baseSliceH);
   dctx.filter = 'contrast(320%)';
@@ -292,13 +335,13 @@ function buildLayersFromOrig(t){
   dctx.globalCompositeOperation = 'source-over';
   dctx.restore();
 
-  // update prevC = orig
+  // prev = orig
   pctx.clearRect(0,0,atlasW,baseSliceH);
   pctx.drawImage(origC, 0, 0);
 }
 
-/* shift shelves down (Firefox-safe), then write top shelf bands */
 function insertTopShelf(){
+  // shift down safely (Firefox)
   const copyH = atlasH - sliceH;
   if (copyH > 0){
     shiftCtx.clearRect(0,0,shiftC.width,shiftC.height);
@@ -306,66 +349,73 @@ function insertTopShelf(){
     actx.drawImage(shiftC, 0, 0, atlasW, copyH, 0, sliceH, atlasW, copyH);
   }
 
-  // write bands into top shelf
+  // write 4 bands
   actx.drawImage(edgeC, 0, 0, atlasW, baseSliceH, 0, 0*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(blurC, 0, 0, atlasW, baseSliceH, 0, 1*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(highC, 0, 0, atlasW, baseSliceH, 0, 2*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(diffC, 0, 0, atlasW, baseSliceH, 0, 3*baseSliceH, atlasW, baseSliceH);
 
-  // slight fade
   actx.fillStyle = 'rgba(0,0,0,0.03)';
   actx.fillRect(0,0,atlasW,sliceH);
 }
 
-/* ------------------------------
-   Feed buffer management
--------------------------------- */
+/* ---------------------------------------------------------
+   Feed queue
+--------------------------------------------------------- */
 let currentTags = document.getElementById('tags').value.trim();
 let feedQueue = [];
 let inFlightFetch = false;
 
+let stats = { loaded:0, failed:0, inserted:0, noise:0 };
+
 async function refillQueue(){
   if (inFlightFetch) return;
   inFlightFetch = true;
+  setStatus('fetching feed…');
   try{
     const data = await fetchFlickrPublicFeed(currentTags);
     const urls = (data?.items || [])
       .map(it => it?.media?.m)
       .filter(Boolean);
 
-    // shuffle a bit
+    // shuffle
     for (let i = urls.length - 1; i > 0; i--){
       const j = Math.floor(Math.random() * (i + 1));
       [urls[i], urls[j]] = [urls[j], urls[i]];
     }
+
     feedQueue = urls;
-    toast(`Flickr loaded: ${feedQueue.length} items`);
+    toast(`Flickr feed: ${feedQueue.length} items`);
+    setStatus(`feed ok (${feedQueue.length}) | inserted:${stats.inserted} loaded:${stats.loaded} failed:${stats.failed} noise:${stats.noise}`);
   }catch(e){
     console.error(e);
-    toast('Flickr fetch failed (fallback noise)');
+    toast('Flickr feed failed (fallback will continue)');
+    setStatus(`feed failed | inserted:${stats.inserted} loaded:${stats.loaded} failed:${stats.failed} noise:${stats.noise}`);
     feedQueue = [];
   }finally{
     inFlightFetch = false;
   }
 }
 
-async function nextPhoto(){
+async function nextPhoto(useProxy){
   if (feedQueue.length < 6) refillQueue(); // async
   const url = feedQueue.shift();
   if (!url) return null;
 
   try{
-    const img = await loadImage(url);
+    const img = await loadImage(url, useProxy);
+    stats.loaded++;
     return { img, url };
   }catch(e){
+    stats.failed++;
     console.warn('Image failed:', url, e);
     return null;
   }
 }
 
-/* ------------------------------
-   Three.js scene
--------------------------------- */
+/* ---------------------------------------------------------
+   Three.js
+--------------------------------------------------------- */
 const app = document.getElementById('app');
 const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance" });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -388,17 +438,15 @@ const dir = new THREE.DirectionalLight(0xffffff, 0.55);
 dir.position.set(2, 3, 1);
 scene.add(dir);
 
-/* atlas texture */
 const atlasTex = new THREE.CanvasTexture(atlas);
 atlasTex.minFilter = THREE.LinearFilter;
 atlasTex.magFilter = THREE.LinearFilter;
 atlasTex.wrapS = THREE.ClampToEdgeWrapping;
 atlasTex.wrapT = THREE.ClampToEdgeWrapping;
 
-/* shader uniforms */
 let colorMode = 0;
-let motion = 0.12;            // synthetic motion
-let motionPulse = 0.0;        // pulse when new photo inserted
+let motion = 0.12;
+let motionPulse = 0.0;
 
 const baseUniforms = {
   uAtlas: { value: atlasTex },
@@ -417,7 +465,7 @@ const shelvesMat = new THREE.ShaderMaterial({
   transparent: true,
   depthWrite: false,
   uniforms: baseUniforms,
-  vertexShader: /* glsl */`
+  vertexShader: `
     varying vec2 vUv;
     varying float vDepth;
     void main(){
@@ -427,7 +475,7 @@ const shelvesMat = new THREE.ShaderMaterial({
       gl_Position = projectionMatrix * mv;
     }
   `,
-  fragmentShader: /* glsl */`
+  fragmentShader: `
     precision highp float;
     varying vec2 vUv;
     varying float vDepth;
@@ -485,10 +533,9 @@ const shelvesMat = new THREE.ShaderMaterial({
       float localY = 0.0;
 
       if (uLayerMode == 1) {
-        bandIndex = 3.0; // diff
+        bandIndex = 3.0;
         localY = clamp(uvG.y, 0.0, 1.0);
       } else {
-        // top=edge, mid=low, bottom=high
         if (uvG.y > 0.666) { bandIndex = 0.0; localY = (uvG.y - 0.666) / 0.334; }
         else if (uvG.y > 0.333) { bandIndex = 1.0; localY = (uvG.y - 0.333) / 0.333; }
         else { bandIndex = 2.0; localY = (uvG.y) / 0.333; }
@@ -546,7 +593,6 @@ const shelvesMat = new THREE.ShaderMaterial({
   `
 });
 
-/* shelves group */
 const shelvesGroup = new THREE.Group();
 scene.add(shelvesGroup);
 let shelvesEnabled = true;
@@ -575,15 +621,14 @@ function rebuildShelves(){
     const k = i / Math.max(count-1,1);
     const z = -lerp(0.2, 8.8, k);
     const bend = (k - 0.5);
-    const x = 0.55 * Math.sin(bend * 2.2);
-    const y = 0.12 * Math.sin(bend * 3.0);
-
-    front.position.set(x, y, z);
+    front.position.set(
+      0.55 * Math.sin(bend * 2.2),
+      0.12 * Math.sin(bend * 3.0),
+      z
+    );
     front.rotation.y = 0.25 * Math.sin(bend * 2.0);
     front.rotation.x = 0.10 * Math.sin(bend * 1.7);
-
-    const s = lerp(1.04, 0.78, k);
-    front.scale.setScalar(s);
+    front.scale.setScalar(lerp(1.04, 0.78, k));
     shelvesGroup.add(front);
 
     const mDiff = shelvesMat.clone();
@@ -603,18 +648,14 @@ function rebuildShelves(){
 }
 rebuildShelves();
 
-/* ------------------------------
-   4D Tesseract wireframe
--------------------------------- */
+/* tesseract wireframe */
 let tesseractEnabled = true;
-
 function tesseractVertices4D(){
   const vs = [];
   for (let x of [-1,1])
   for (let y of [-1,1])
   for (let z of [-1,1])
-  for (let w of [-1,1])
-    vs.push(new THREE.Vector4(x,y,z,w));
+  for (let w of [-1,1]) vs.push(new THREE.Vector4(x,y,z,w));
   return vs;
 }
 const V4 = tesseractVertices4D();
@@ -629,7 +670,6 @@ for (let i=0; i<V4.length; i++){
     if (d === 1) edges.push([i,j]);
   }
 }
-
 const linePositions = new Float32Array(edges.length * 2 * 3);
 const lineGeo = new THREE.BufferGeometry();
 lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
@@ -655,7 +695,6 @@ function project4Dto3D(v4, wDist=3.2){
 function updateTesseract(t, m){
   const a = 0.65 + 1.65*m;
   const b = 0.35 + 1.15*m;
-
   const pts3 = V4.map(v=>{
     let r = v.clone();
     r = rot4(0,3, t*0.53*a, r);
@@ -665,7 +704,6 @@ function updateTesseract(t, m){
     r = rot4(1,2, t*0.19, r);
     return project4Dto3D(r, 3.0 + 0.8*Math.sin(t*0.6));
   });
-
   let k = 0;
   for (const [i,j] of edges){
     const p = pts3[i], q = pts3[j];
@@ -673,20 +711,16 @@ function updateTesseract(t, m){
     linePositions[k++] = q.x; linePositions[k++] = q.y; linePositions[k++] = q.z;
   }
   lineGeo.attributes.position.needsUpdate = true;
-
   tesseractLines.scale.setScalar(0.68 + 0.35*m);
   lineMat.opacity = 0.25 + 0.55*(0.35 + m);
 }
 
-/* ------------------------------
-   Dust
--------------------------------- */
+/* dust */
 let dustEnabled = true;
 const dustCount = 2600;
 const dustGeo = new THREE.BufferGeometry();
 const dustPos = new Float32Array(dustCount*3);
 const dustVel = new Float32Array(dustCount*3);
-
 for (let i=0; i<dustCount; i++){
   dustPos[i*3+0] = (Math.random()*2-1) * 6;
   dustPos[i*3+1] = (Math.random()*2-1) * 3.5;
@@ -702,120 +736,116 @@ scene.add(dust);
 
 function updateDust(m){
   for (let i=0; i<dustCount; i++){
-    let x = dustPos[i*3+0];
-    let y = dustPos[i*3+1];
-    let z = dustPos[i*3+2];
-
+    let x = dustPos[i*3+0], y = dustPos[i*3+1], z = dustPos[i*3+2];
     const vx = dustVel[i*3+0];
     const vy = dustVel[i*3+1];
     const vz = dustVel[i*3+2] * (0.6 + 1.8*m);
-
     x += vx * (0.6 + 2.2*m);
     y += vy * (0.6 + 2.2*m);
     z += vz;
-
     x += -x * (0.00006 + 0.00022*m);
     y += -y * (0.00006 + 0.00022*m);
-
     if (z > 1.8){
       z = -10 - Math.random()*5;
       x = (Math.random()*2-1) * 6;
       y = (Math.random()*2-1) * 3.5;
     }
-
-    dustPos[i*3+0] = x;
-    dustPos[i*3+1] = y;
-    dustPos[i*3+2] = z;
+    dustPos[i*3+0] = x; dustPos[i*3+1] = y; dustPos[i*3+2] = z;
   }
   dustGeo.attributes.position.needsUpdate = true;
   dustMat.opacity = 0.10 + 0.35*(0.35 + m);
 }
 
-/* ------------------------------
-   Main insert pipeline (Flickr -> layers -> atlas -> texture)
--------------------------------- */
+/* ---------------------------------------------------------
+   Insert pipeline
+--------------------------------------------------------- */
 let running = true;
 let inserting = false;
-let lastMeta = '';
 
 async function insertFromFlickr(t){
   if (inserting) return;
   inserting = true;
 
-  // try to get a photo
-  let payload = await nextPhoto();
+  const useProxy = document.getElementById('proxy').checked;
+
   const octx = origC.getContext('2d', { willReadFrequently:true });
+
+  // try a few times to skip failed images
+  let payload = null;
+  for (let tries=0; tries<6; tries++){
+    payload = await nextPhoto(useProxy);
+    if (payload && payload.img) break;
+  }
 
   if (payload && payload.img){
     const img = payload.img;
 
-    // if aspect changed a lot, rebuild atlas/shelves
+    // optional: adapt aspect (only if radically different)
     const vw = img.naturalWidth || img.width || 16;
     const vh = img.naturalHeight || img.height || 9;
     const newBase = Math.round(atlasW * (vh / vw));
     if (newBase !== baseSliceH){
       resizeAtlasForAspect(vw, vh);
       rebuildShelves();
-      baseUniforms.uAtlasSize.value.set(atlasW, atlasH);
-      baseUniforms.uSliceH.value = sliceH;
-      baseUniforms.uSlices.value = slices;
       atlasTex.needsUpdate = true;
     }
 
     drawImageCover(octx, img);
-    lastMeta = payload.url;
+    stats.inserted++;
     toast('Flickr inserted ✓');
   } else {
     genFallbackNoise(octx, t);
-    lastMeta = '(fallback noise)';
+    stats.noise++;
+    stats.inserted++;
     toast('Fallback inserted ✓');
   }
 
-  buildLayersFromOrig(t);
+  buildLayersFromOrig();
   insertTopShelf();
   atlasTex.needsUpdate = true;
 
-  // pulse for animation
   motionPulse = 1.0;
 
+  setStatus(`queue:${feedQueue.length} | inserted:${stats.inserted} loaded:${stats.loaded} failed:${stats.failed} noise:${stats.noise}`);
   inserting = false;
 }
 
-/* initial fill */
-refillQueue();
-
-/* ------------------------------
-   Animation loop
--------------------------------- */
+/* ---------------------------------------------------------
+   Main loop
+--------------------------------------------------------- */
 let last = performance.now();
 
-function ensureFirstInsert(t){
-  if (lastInsertT < -100) {
-    // initialize prevC with something non-empty
-    const pctx = prevC.getContext('2d', { willReadFrequently:true });
-    genFallbackNoise(pctx, t);
-    insertFromFlickr(t);
-    lastInsertT = t;
-  }
+function warmStart(){
+  const t = performance.now()*0.001;
+  const pctx = prevC.getContext('2d', { willReadFrequently:true });
+  genFallbackNoise(pctx, t);
+  const octx = origC.getContext('2d', { willReadFrequently:true });
+  genFallbackNoise(octx, t);
+  buildLayersFromOrig();
+  insertTopShelf();
+  atlasTex.needsUpdate = true;
 }
+warmStart();
+refillQueue();
 
 function animate(now){
   const t = now * 0.001;
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
 
-  ensureFirstInsert(t);
+  if (lastInsertT < -100){
+    insertFromFlickr(t);
+    lastInsertT = t;
+  }
 
   if (running && (t - lastInsertT >= intervalSec)){
     insertFromFlickr(t);
     lastInsertT = t;
   }
 
-  // synthetic motion: base + pulse decay
   motionPulse = Math.max(0, motionPulse - dt * 0.55);
   motion = clamp(0.10 + 0.65*motionPulse + 0.10*Math.sin(t*0.7), 0, 1);
 
-  // update uniforms across shelf materials
   shelvesGroup.traverse(obj=>{
     if (obj.isMesh && obj.material && obj.material.uniforms){
       obj.material.uniforms.uTime.value = t;
@@ -845,22 +875,13 @@ function animate(now){
 }
 requestAnimationFrame(animate);
 
-/* ------------------------------
-   Resize
--------------------------------- */
-addEventListener('resize', ()=>{
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-/* ------------------------------
-   UI / Controls
--------------------------------- */
+/* ---------------------------------------------------------
+   UI
+--------------------------------------------------------- */
 document.getElementById('apply').addEventListener('click', async ()=>{
   currentTags = document.getElementById('tags').value.trim() || 'space,nebula,night';
-  toast('Loading Flickr…');
   feedQueue = [];
+  toast('Loading Flickr…');
   await refillQueue();
 });
 
@@ -870,14 +891,18 @@ document.getElementById('pause').addEventListener('click', ()=>{
   toast(running ? 'Running' : 'Paused');
 });
 
-/* Hotkeys */
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* hotkeys */
 const hud = document.getElementById('hud');
 addEventListener('keydown', (e)=>{
   const k = e.key.toLowerCase();
   if (k === 'h'){
-    hud.style.display = (hud.style.display === 'none') ? 'block' : 'block';
-    if (hud.style.display === 'none') hud.style.display = 'block';
-    else hud.style.display = 'none';
+    hud.style.display = (hud.style.display === 'none') ? 'block' : 'none';
     toast(hud.style.display === 'none' ? "HUD hidden" : "HUD shown");
   }
   if (k === 'f'){
@@ -911,15 +936,6 @@ addEventListener('keydown', (e)=>{
   if (k === '2'){ tesseractEnabled = !tesseractEnabled; toast("Tesseract: " + (tesseractEnabled?"ON":"OFF")); }
   if (k === '3'){ dustEnabled = !dustEnabled; toast("Dust: " + (dustEnabled?"ON":"OFF")); }
 });
-
-/* Start: show something immediately even before Flickr returns */
-(function warmStart(){
-  const octx = origC.getContext('2d', { willReadFrequently:true });
-  genFallbackNoise(octx, performance.now()*0.001);
-  buildLayersFromOrig(performance.now()*0.001);
-  insertTopShelf();
-  atlasTex.needsUpdate = true;
-})();
 </script>
 </body>
 </html>
