@@ -3,11 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Tesseract Installation — Flickr Shelves (Fixed JSONP)</title>
+  <title>Tesseract Installation — Flickr Shelves (MaxTexture Safe)</title>
   <style>
     html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#000; }
     #app { position:fixed; inset:0; }
-
     #hud{
       position:fixed; left:12px; top:12px; z-index:10;
       color:#eaeaea;
@@ -16,44 +15,29 @@
       border: 1px solid rgba(255,255,255,.12);
       border-radius: 12px;
       padding: 10px 12px;
-      max-width: min(760px, calc(100vw - 24px));
+      max-width: min(860px, calc(100vw - 24px));
       backdrop-filter: blur(8px);
       user-select:none;
     }
     #hud b { color:#fff; }
     #hud .row { opacity:.92; }
     #hud .dim { opacity:.65; }
-
     #hud input{
-      width: 260px;
-      padding: 6px 8px;
+      width: 260px; padding: 6px 8px;
       border-radius: 10px;
       border: 1px solid rgba(255,255,255,.18);
-      background: rgba(0,0,0,.35);
-      color: #fff;
-      outline: none;
+      background: rgba(0,0,0,.35); color:#fff; outline:none;
       margin-left: 8px;
     }
     #hud button, #hud label{
-      margin-left: 8px;
-      padding: 6px 10px;
+      margin-left: 8px; padding: 6px 10px;
       border-radius: 10px;
       border: 1px solid rgba(255,255,255,.18);
-      background: rgba(0,0,0,.35);
-      color: #fff;
-      cursor: pointer;
-    }
-    #hud label{
-      display:inline-flex;
-      align-items:center;
-      gap:6px;
+      background: rgba(0,0,0,.35); color:#fff;
       cursor:pointer;
     }
-    #hud input[type="checkbox"]{
-      width:auto;
-      margin:0;
-      transform: translateY(1px);
-    }
+    #hud label{ display:inline-flex; align-items:center; gap:6px; }
+    #hud input[type="checkbox"]{ width:auto; margin:0; transform: translateY(1px); }
 
     #toast{
       position:fixed; right:12px; bottom:12px; z-index:20;
@@ -67,10 +51,7 @@
       pointer-events:none;
     }
     #toast.show { opacity:1; transform: translateY(0); }
-
     canvas { display:block; }
-    a { color:#cfe4ff; text-decoration:none; }
-    a:hover { text-decoration:underline; }
   </style>
 </head>
 <body>
@@ -85,7 +66,7 @@
       <input id="tags" value="space,nebula,night" />
       <button id="apply">Apply</button>
       <button id="pause">Pause</button>
-      <label title="CORSで画像が落ちるときにON（外部プロキシ経由で取得）">
+      <label title="画像がCORSで落ちる/直取得が無理な時はON">
         <input id="proxy" type="checkbox" checked />
         Proxy
       </label>
@@ -93,6 +74,11 @@
 
     <div class="row dim" style="margin-top:6px;">
       Status: <span id="status">init…</span>
+    </div>
+    <div class="row dim">
+      GPU maxTexture: <span id="maxTex">?</span> /
+      slices(requested): <span id="reqSlices">?</span> /
+      slices(used): <span id="usedSlices">?</span>
     </div>
 
     <div class="row dim" style="margin-top:6px;">
@@ -112,6 +98,10 @@ const lerp  = (a, b, t) => a + (b - a) * t;
 
 const toastEl = document.getElementById('toast');
 const statusEl = document.getElementById('status');
+const maxTexEl = document.getElementById('maxTex');
+const reqSlicesEl = document.getElementById('reqSlices');
+const usedSlicesEl = document.getElementById('usedSlices');
+
 function setStatus(s){ statusEl.textContent = s; }
 let toastTimer = 0;
 function toast(msg){
@@ -121,25 +111,20 @@ function toast(msg){
   toastTimer = setTimeout(()=> toastEl.classList.remove('show'), 1200);
 }
 
-/* ---------------------------------------------------------
-   Flickr Public Feed (JSONP)
-   IMPORTANT: callback is hardcoded: jsonFlickrFeed(...)
---------------------------------------------------------- */
+/* ---------- Flickr feed JSONP (callback fixed: jsonFlickrFeed) ---------- */
 function fetchFlickrPublicFeed(tags){
   return new Promise((resolve, reject)=>{
     const script = document.createElement('script');
     const url = new URL('https://www.flickr.com/services/feeds/photos_public.gne');
-
     url.searchParams.set('format', 'json');
     url.searchParams.set('tags', tags || 'space,nebula,night');
     url.searchParams.set('tagmode', 'any');
 
-    // Flickr feed JSONP calls window.jsonFlickrFeed(data)
     const prev = window.jsonFlickrFeed;
     let done = false;
 
     const cleanup = ()=>{
-      if (script.parentNode) script.parentNode.removeChild(script);
+      script.remove();
       if (prev) window.jsonFlickrFeed = prev;
       else try { delete window.jsonFlickrFeed; } catch {}
     };
@@ -159,7 +144,6 @@ function fetchFlickrPublicFeed(tags){
       cleanup();
       reject(new Error('Failed to load Flickr feed (script error)'));
     };
-
     document.head.appendChild(script);
 
     setTimeout(()=>{
@@ -171,13 +155,8 @@ function fetchFlickrPublicFeed(tags){
   });
 }
 
-/* ---------------------------------------------------------
-   Image loading (CORS safe)
-   - if CORS fails, onerror -> skip
-   - optional proxy for CORS trouble on staticflickr
---------------------------------------------------------- */
-function proxify(url){
-  // images.weserv.nl expects url without protocol often
+/* ---------- optional proxy ---------- */
+function proxifyWeserv(url){
   const stripped = url.replace(/^https?:\/\//,'');
   const prox = new URL('https://images.weserv.nl/');
   prox.searchParams.set('url', stripped);
@@ -189,33 +168,56 @@ function proxify(url){
 async function loadImage(url, useProxy){
   return new Promise((resolve, reject)=>{
     const img = new Image();
-    img.crossOrigin = 'anonymous'; // keep canvas origin-clean for WebGL upload
+    img.crossOrigin = 'anonymous';
     img.decoding = 'async';
     img.referrerPolicy = 'no-referrer';
-
     img.onload = ()=> resolve(img);
     img.onerror = ()=> reject(new Error('Image load failed (CORS or network)'));
-
-    img.src = useProxy ? proxify(url) : url;
+    img.src = useProxy ? proxifyWeserv(url) : url;
   });
 }
 
-/* ---------------------------------------------------------
-   Atlas & layer decomposition (composite-only, no getImageData)
---------------------------------------------------------- */
-let slices = 36;
+/* ---------- Three.js ---------- */
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance" });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x000000, 1);
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000000, 0.045);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 200);
+camera.position.set(0, 0.9, 3.2);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+const dir = new THREE.DirectionalLight(0xffffff, 0.55);
+dir.position.set(2, 3, 1);
+scene.add(dir);
+
+/* ---------- Max texture size (CRITICAL FIX) ---------- */
+const MAX_TEX = renderer.capabilities.maxTextureSize || 8192;
+maxTexEl.textContent = String(MAX_TEX);
+
+/* ---------- Atlas & processing (keep canvas <= MAX_TEX) ---------- */
+let requestedSlices = 36;     // what user wants
+let slices = requestedSlices; // what we actually use (clamped)
 let intervalSec = 4.0;
 let lastInsertT = -999;
 
-let atlasW = 640;
-let baseSliceH = 360;
+let atlasW = 512;            // smaller than 640 to save memory
+let baseSliceH = 288;
 let sliceH = baseSliceH * 4;
 let atlasH = sliceH * slices;
 
 const atlas = document.createElement('canvas');
 const actx = atlas.getContext('2d', { willReadFrequently: true });
 
-// Firefox-safe shift buffer (avoid drawing atlas onto itself)
 const shiftC = document.createElement('canvas');
 const shiftCtx = shiftC.getContext('2d', { willReadFrequently: true });
 
@@ -226,11 +228,29 @@ const highC = document.createElement('canvas');
 const diffC = document.createElement('canvas');
 const prevC = document.createElement('canvas');
 
+function recomputeSlicesClamp(){
+  // slices * sliceH must be <= MAX_TEX
+  const maxSlices = Math.max(4, Math.floor(MAX_TEX / Math.max(1, sliceH)));
+  slices = Math.min(requestedSlices, maxSlices);
+  reqSlicesEl.textContent = String(requestedSlices);
+  usedSlicesEl.textContent = String(slices);
+}
+
 function resizeAtlasForAspect(vw, vh){
-  atlasW = 640;
-  baseSliceH = Math.round(atlasW * (vh / vw));
+  atlasW = 512; // keep conservative
+  baseSliceH = Math.max(180, Math.round(atlasW * (vh / vw)));
   sliceH = baseSliceH * 4;
+
+  recomputeSlicesClamp();
+
   atlasH = sliceH * slices;
+
+  // hard safety (should already hold)
+  if (atlasH > MAX_TEX) {
+    slices = Math.max(4, Math.floor(MAX_TEX / sliceH));
+    atlasH = sliceH * slices;
+    usedSlicesEl.textContent = String(slices);
+  }
 
   atlas.width = atlasW;
   atlas.height = atlasH;
@@ -292,14 +312,12 @@ function buildLayersFromOrig(){
   const dctx = diffC.getContext('2d', { willReadFrequently:true });
   const pctx = prevC.getContext('2d', { willReadFrequently:true });
 
-  // low-pass blur
   bctx.save();
   bctx.clearRect(0,0,atlasW,baseSliceH);
   bctx.filter = 'blur(12px)';
   bctx.drawImage(origC, 0, 0);
   bctx.restore();
 
-  // edge pseudo
   ectx.save();
   ectx.clearRect(0,0,atlasW,baseSliceH);
   ectx.filter = 'contrast(280%)';
@@ -311,7 +329,6 @@ function buildLayersFromOrig(){
   ectx.globalCompositeOperation = 'source-over';
   ectx.restore();
 
-  // high-pass pseudo
   hctx.save();
   hctx.clearRect(0,0,atlasW,baseSliceH);
   hctx.filter = 'contrast(190%) brightness(110%)';
@@ -324,7 +341,6 @@ function buildLayersFromOrig(){
   hctx.globalCompositeOperation = 'source-over';
   hctx.restore();
 
-  // diff vs previous
   dctx.save();
   dctx.clearRect(0,0,atlasW,baseSliceH);
   dctx.filter = 'contrast(320%)';
@@ -335,13 +351,12 @@ function buildLayersFromOrig(){
   dctx.globalCompositeOperation = 'source-over';
   dctx.restore();
 
-  // prev = orig
   pctx.clearRect(0,0,atlasW,baseSliceH);
   pctx.drawImage(origC, 0, 0);
 }
 
 function insertTopShelf(){
-  // shift down safely (Firefox)
+  // Firefox-safe shift (NO self-copy)
   const copyH = atlasH - sliceH;
   if (copyH > 0){
     shiftCtx.clearRect(0,0,shiftC.width,shiftC.height);
@@ -349,7 +364,6 @@ function insertTopShelf(){
     actx.drawImage(shiftC, 0, 0, atlasW, copyH, 0, sliceH, atlasW, copyH);
   }
 
-  // write 4 bands
   actx.drawImage(edgeC, 0, 0, atlasW, baseSliceH, 0, 0*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(blurC, 0, 0, atlasW, baseSliceH, 0, 1*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(highC, 0, 0, atlasW, baseSliceH, 0, 2*baseSliceH, atlasW, baseSliceH);
@@ -359,91 +373,14 @@ function insertTopShelf(){
   actx.fillRect(0,0,atlasW,sliceH);
 }
 
-/* ---------------------------------------------------------
-   Feed queue
---------------------------------------------------------- */
-let currentTags = document.getElementById('tags').value.trim();
-let feedQueue = [];
-let inFlightFetch = false;
-
-let stats = { loaded:0, failed:0, inserted:0, noise:0 };
-
-async function refillQueue(){
-  if (inFlightFetch) return;
-  inFlightFetch = true;
-  setStatus('fetching feed…');
-  try{
-    const data = await fetchFlickrPublicFeed(currentTags);
-    const urls = (data?.items || [])
-      .map(it => it?.media?.m)
-      .filter(Boolean);
-
-    // shuffle
-    for (let i = urls.length - 1; i > 0; i--){
-      const j = Math.floor(Math.random() * (i + 1));
-      [urls[i], urls[j]] = [urls[j], urls[i]];
-    }
-
-    feedQueue = urls;
-    toast(`Flickr feed: ${feedQueue.length} items`);
-    setStatus(`feed ok (${feedQueue.length}) | inserted:${stats.inserted} loaded:${stats.loaded} failed:${stats.failed} noise:${stats.noise}`);
-  }catch(e){
-    console.error(e);
-    toast('Flickr feed failed (fallback will continue)');
-    setStatus(`feed failed | inserted:${stats.inserted} loaded:${stats.loaded} failed:${stats.failed} noise:${stats.noise}`);
-    feedQueue = [];
-  }finally{
-    inFlightFetch = false;
-  }
-}
-
-async function nextPhoto(useProxy){
-  if (feedQueue.length < 6) refillQueue(); // async
-  const url = feedQueue.shift();
-  if (!url) return null;
-
-  try{
-    const img = await loadImage(url, useProxy);
-    stats.loaded++;
-    return { img, url };
-  }catch(e){
-    stats.failed++;
-    console.warn('Image failed:', url, e);
-    return null;
-  }
-}
-
-/* ---------------------------------------------------------
-   Three.js
---------------------------------------------------------- */
-const app = document.getElementById('app');
-const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance" });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
-renderer.setClearColor(0x000000, 1);
-app.appendChild(renderer.domElement);
-
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x000000, 0.045);
-
-const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 200);
-camera.position.set(0, 0.9, 3.2);
-
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.06;
-
-scene.add(new THREE.AmbientLight(0xffffff, 0.25));
-const dir = new THREE.DirectionalLight(0xffffff, 0.55);
-dir.position.set(2, 3, 1);
-scene.add(dir);
-
+/* ---------- Texture ---------- */
 const atlasTex = new THREE.CanvasTexture(atlas);
 atlasTex.minFilter = THREE.LinearFilter;
 atlasTex.magFilter = THREE.LinearFilter;
 atlasTex.wrapS = THREE.ClampToEdgeWrapping;
 atlasTex.wrapT = THREE.ClampToEdgeWrapping;
 
+/* ---------- Shader ---------- */
 let colorMode = 0;
 let motion = 0.12;
 let motionPulse = 0.0;
@@ -458,7 +395,7 @@ const baseUniforms = {
   uMotion: { value: 0 },
   uColorMode: { value: colorMode },
   uGain: { value: 1.15 },
-  uLayerMode: { value: 0 } // 0=front, 1=diff-only
+  uLayerMode: { value: 0 }
 };
 
 const shelvesMat = new THREE.ShaderMaterial({
@@ -593,6 +530,7 @@ const shelvesMat = new THREE.ShaderMaterial({
   `
 });
 
+/* ---------- Shelves ---------- */
 const shelvesGroup = new THREE.Group();
 scene.add(shelvesGroup);
 let shelvesEnabled = true;
@@ -646,9 +584,8 @@ function rebuildShelves(){
     shelvesGroup.add(back);
   }
 }
-rebuildShelves();
 
-/* tesseract wireframe */
+/* ---------- Tesseract (same as before, minimal) ---------- */
 let tesseractEnabled = true;
 function tesseractVertices4D(){
   const vs = [];
@@ -715,9 +652,9 @@ function updateTesseract(t, m){
   lineMat.opacity = 0.25 + 0.55*(0.35 + m);
 }
 
-/* dust */
+/* ---------- Dust (light) ---------- */
 let dustEnabled = true;
-const dustCount = 2600;
+const dustCount = 1800;
 const dustGeo = new THREE.BufferGeometry();
 const dustPos = new Float32Array(dustCount*3);
 const dustVel = new Float32Array(dustCount*3);
@@ -756,9 +693,53 @@ function updateDust(m){
   dustMat.opacity = 0.10 + 0.35*(0.35 + m);
 }
 
-/* ---------------------------------------------------------
-   Insert pipeline
---------------------------------------------------------- */
+/* ---------- Feed queue ---------- */
+let currentTags = document.getElementById('tags').value.trim();
+let feedQueue = [];
+let inFlightFetch = false;
+let stats = { inserted:0, loaded:0, failed:0, noise:0 };
+
+async function refillQueue(){
+  if (inFlightFetch) return;
+  inFlightFetch = true;
+  setStatus('fetching feed…');
+  try{
+    const data = await fetchFlickrPublicFeed(currentTags);
+    const urls = (data?.items || []).map(it => it?.media?.m).filter(Boolean);
+
+    for (let i = urls.length - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      [urls[i], urls[j]] = [urls[j], urls[i]];
+    }
+
+    feedQueue = urls;
+    toast(`Flickr feed: ${feedQueue.length} items`);
+  }catch(e){
+    console.error(e);
+    toast('Flickr feed failed (fallback continues)');
+    feedQueue = [];
+  }finally{
+    inFlightFetch = false;
+    setStatus(`queue:${feedQueue.length} | inserted:${stats.inserted} loaded:${stats.loaded} failed:${stats.failed} noise:${stats.noise}`);
+  }
+}
+
+async function nextPhoto(useProxy){
+  if (feedQueue.length < 6) refillQueue(); // async
+  const url = feedQueue.shift();
+  if (!url) return null;
+  try{
+    const img = await loadImage(url, useProxy);
+    stats.loaded++;
+    return { img, url };
+  }catch(e){
+    stats.failed++;
+    console.warn('Image failed:', url, e);
+    return null;
+  }
+}
+
+/* ---------- Insert pipeline ---------- */
 let running = true;
 let inserting = false;
 
@@ -767,10 +748,8 @@ async function insertFromFlickr(t){
   inserting = true;
 
   const useProxy = document.getElementById('proxy').checked;
-
   const octx = origC.getContext('2d', { willReadFrequently:true });
 
-  // try a few times to skip failed images
   let payload = null;
   for (let tries=0; tries<6; tries++){
     payload = await nextPhoto(useProxy);
@@ -779,14 +758,18 @@ async function insertFromFlickr(t){
 
   if (payload && payload.img){
     const img = payload.img;
-
-    // optional: adapt aspect (only if radically different)
     const vw = img.naturalWidth || img.width || 16;
     const vh = img.naturalHeight || img.height || 9;
-    const newBase = Math.round(atlasW * (vh / vw));
+
+    // aspect changes -> resize atlas but STILL keep <= MAX_TEX
+    const newBase = Math.max(180, Math.round(atlasW * (vh / vw)));
     if (newBase !== baseSliceH){
       resizeAtlasForAspect(vw, vh);
+      // update uniforms & rebuild shelves after resize
       rebuildShelves();
+      baseUniforms.uAtlasSize.value.set(atlasW, atlasH);
+      baseUniforms.uSliceH.value = sliceH;
+      baseUniforms.uSlices.value = slices;
       atlasTex.needsUpdate = true;
     }
 
@@ -805,17 +788,15 @@ async function insertFromFlickr(t){
   atlasTex.needsUpdate = true;
 
   motionPulse = 1.0;
-
   setStatus(`queue:${feedQueue.length} | inserted:${stats.inserted} loaded:${stats.loaded} failed:${stats.failed} noise:${stats.noise}`);
   inserting = false;
 }
 
-/* ---------------------------------------------------------
-   Main loop
---------------------------------------------------------- */
-let last = performance.now();
+/* ---------- Build shelves now ---------- */
+rebuildShelves();
 
-function warmStart(){
+/* ---------- Warm start ---------- */
+(function warmStart(){
   const t = performance.now()*0.001;
   const pctx = prevC.getContext('2d', { willReadFrequently:true });
   genFallbackNoise(pctx, t);
@@ -824,10 +805,13 @@ function warmStart(){
   buildLayersFromOrig();
   insertTopShelf();
   atlasTex.needsUpdate = true;
-}
-warmStart();
+})();
+
 refillQueue();
 
+/* ---------- Animate ---------- */
+let last = performance.now();
+let colorMode = 0;
 function animate(now){
   const t = now * 0.001;
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -837,7 +821,6 @@ function animate(now){
     insertFromFlickr(t);
     lastInsertT = t;
   }
-
   if (running && (t - lastInsertT >= intervalSec)){
     insertFromFlickr(t);
     lastInsertT = t;
@@ -851,6 +834,9 @@ function animate(now){
       obj.material.uniforms.uTime.value = t;
       obj.material.uniforms.uMotion.value = motion;
       obj.material.uniforms.uColorMode.value = colorMode;
+      obj.material.uniforms.uSlices.value = slices;
+      obj.material.uniforms.uSliceH.value = sliceH;
+      obj.material.uniforms.uAtlasSize.value.set(atlasW, atlasH);
     }
   });
 
@@ -870,14 +856,11 @@ function animate(now){
 
   controls.update();
   renderer.render(scene, camera);
-
   requestAnimationFrame(animate);
 }
 requestAnimationFrame(animate);
 
-/* ---------------------------------------------------------
-   UI
---------------------------------------------------------- */
+/* ---------- UI ---------- */
 document.getElementById('apply').addEventListener('click', async ()=>{
   currentTags = document.getElementById('tags').value.trim() || 'space,nebula,night';
   feedQueue = [];
@@ -919,18 +902,18 @@ addEventListener('keydown', (e)=>{
     toast("Color mode: " + colorMode);
   }
   if (k === '['){
-    slices = clamp(slices - 4, 12, 96);
+    requestedSlices = clamp(requestedSlices - 4, 8, 96);
     resizeAtlasForAspect(16, 9);
     rebuildShelves();
     atlasTex.needsUpdate = true;
-    toast("Slices: " + slices);
+    toast(`Slices requested:${requestedSlices} used:${slices}`);
   }
   if (k === ']'){
-    slices = clamp(slices + 4, 12, 96);
+    requestedSlices = clamp(requestedSlices + 4, 8, 96);
     resizeAtlasForAspect(16, 9);
     rebuildShelves();
     atlasTex.needsUpdate = true;
-    toast("Slices: " + slices);
+    toast(`Slices requested:${requestedSlices} used:${slices}`);
   }
   if (k === '1'){ shelvesEnabled = !shelvesEnabled; toast("Shelves: " + (shelvesEnabled?"ON":"OFF")); }
   if (k === '2'){ tesseractEnabled = !tesseractEnabled; toast("Tesseract: " + (tesseractEnabled?"ON":"OFF")); }
