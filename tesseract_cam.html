@@ -190,6 +190,9 @@ const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.setClearColor(0x000000, 1);
+/* ✅暗さ/色問題を避ける */
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -236,6 +239,36 @@ const highC = document.createElement('canvas');
 const diffC = document.createElement('canvas');
 const prevC = document.createElement('canvas');
 
+/* ✅ CanvasTexture を “サイズ変更に強い” 形で管理する */
+let atlasTex;
+
+function makeAtlasTexture(){
+  const t = new THREE.CanvasTexture(atlas);
+  t.minFilter = THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.wrapS = THREE.ClampToEdgeWrapping;
+  t.wrapT = THREE.ClampToEdgeWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/* baseUniforms / shelvesGroup が存在する場合はそこにも反映する */
+function replaceAtlasTexture(){
+  if (atlasTex) atlasTex.dispose();
+  atlasTex = makeAtlasTexture();
+
+  if (typeof baseUniforms !== 'undefined' && baseUniforms?.uAtlas) {
+    baseUniforms.uAtlas.value = atlasTex;
+  }
+  if (typeof shelvesGroup !== 'undefined' && shelvesGroup?.traverse) {
+    shelvesGroup.traverse(obj=>{
+      if (obj.isMesh && obj.material?.uniforms?.uAtlas){
+        obj.material.uniforms.uAtlas.value = atlasTex;
+      }
+    });
+  }
+}
+
 function recomputeSlicesClamp(){
   const maxSlices = Math.max(4, Math.floor(MAX_TEX / Math.max(1, sliceH)));
   slices = Math.min(requestedSlices, maxSlices);
@@ -263,8 +296,17 @@ function resizeAtlasForAspect(vw, vh){
     c.width = atlasW;
     c.height = baseSliceH;
   }
+
+  /* ✅ここが決定打：atlasサイズ変更後は必ずGPUテクスチャを作り直す */
+  replaceAtlasTexture();
 }
+
 resizeAtlasForAspect(16, 9);
+
+/* ---------- Single declaration (no redeclare) ---------- */
+let colorMode = 0;
+let motion = 0.12;
+let motionPulse = 0.0;
 
 let mirror = true;
 
@@ -371,21 +413,9 @@ function insertTopShelf(){
   actx.fillRect(0,0,atlasW,sliceH);
 }
 
-/* ---------- Texture ---------- */
-const atlasTex = new THREE.CanvasTexture(atlas);
-atlasTex.minFilter = THREE.LinearFilter;
-atlasTex.magFilter = THREE.LinearFilter;
-atlasTex.wrapS = THREE.ClampToEdgeWrapping;
-atlasTex.wrapT = THREE.ClampToEdgeWrapping;
-
-/* ---------- Single declaration HERE (no redeclare) ---------- */
-let colorMode = 0;
-let motion = 0.12;
-let motionPulse = 0.0;
-
 /* ---------- Shader ---------- */
 const baseUniforms = {
-  uAtlas: { value: atlasTex },
+  uAtlas: { value: atlasTex },  // replaceAtlasTexture()でセット済み
   uAtlasSize: { value: new THREE.Vector2(atlasW, atlasH) },
   uSliceH: { value: sliceH },
   uSlices: { value: slices },
@@ -528,6 +558,10 @@ const shelvesMat = new THREE.ShaderMaterial({
   `
 });
 
+/* ✅視認性向上（任意だが効く） */
+shelvesMat.blending = THREE.AdditiveBlending;
+shelvesMat.side = THREE.DoubleSide;
+
 /* ---------- Shelves ---------- */
 const shelvesGroup = new THREE.Group();
 scene.add(shelvesGroup);
@@ -536,6 +570,7 @@ let shelvesEnabled = true;
 function rebuildShelves(){
   while (shelvesGroup.children.length) shelvesGroup.remove(shelvesGroup.children[0]);
 
+  baseUniforms.uAtlas.value = atlasTex;
   baseUniforms.uAtlasSize.value.set(atlasW, atlasH);
   baseUniforms.uSliceH.value = sliceH;
   baseUniforms.uSlices.value = slices;
@@ -764,7 +799,7 @@ async function insertFromFlickr(t){
       baseUniforms.uAtlasSize.value.set(atlasW, atlasH);
       baseUniforms.uSliceH.value = sliceH;
       baseUniforms.uSlices.value = slices;
-      atlasTex.needsUpdate = true;
+      // atlasTexはreplaceAtlasTexture()で更新済み
     }
 
     drawImageCover(octx, img);
@@ -830,6 +865,7 @@ function animate(now){
       obj.material.uniforms.uSlices.value = slices;
       obj.material.uniforms.uSliceH.value = sliceH;
       obj.material.uniforms.uAtlasSize.value.set(atlasW, atlasH);
+      obj.material.uniforms.uAtlas.value = atlasTex;
     }
   });
 
@@ -875,42 +911,4 @@ addEventListener('resize', ()=>{
 
 const hud = document.getElementById('hud');
 addEventListener('keydown', (e)=>{
-  const k = e.key.toLowerCase();
-  if (k === 'h'){
-    hud.style.display = (hud.style.display === 'none') ? 'block' : 'none';
-    toast(hud.style.display === 'none' ? "HUD hidden" : "HUD shown");
-  }
-  if (k === 'f'){
-    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
-    else document.exitFullscreen?.();
-    toast("Fullscreen toggle");
-  }
-  if (k === 'm'){
-    mirror = !mirror;
-    toast("Mirror: " + (mirror ? "ON" : "OFF"));
-  }
-  if (k === 'c'){
-    colorMode = (colorMode + 1) % 3;
-    toast("Color mode: " + colorMode);
-  }
-  if (k === '['){
-    requestedSlices = clamp(requestedSlices - 4, 8, 96);
-    resizeAtlasForAspect(16, 9);
-    rebuildShelves();
-    atlasTex.needsUpdate = true;
-    toast(`Slices requested:${requestedSlices} used:${slices}`);
-  }
-  if (k === ']'){
-    requestedSlices = clamp(requestedSlices + 4, 8, 96);
-    resizeAtlasForAspect(16, 9);
-    rebuildShelves();
-    atlasTex.needsUpdate = true;
-    toast(`Slices requested:${requestedSlices} used:${slices}`);
-  }
-  if (k === '1'){ shelvesEnabled = !shelvesEnabled; toast("Shelves: " + (shelvesEnabled?"ON":"OFF")); }
-  if (k === '2'){ tesseractEnabled = !tesseractEnabled; toast("Tesseract: " + (tesseractEnabled?"ON":"OFF")); }
-  if (k === '3'){ dustEnabled = !dustEnabled; toast("Dust: " + (dustEnabled?"ON":"OFF")); }
-});
-</script>
-</body>
-</html>
+  const k = e.key
