@@ -3,10 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Tesseract Camera Installation — 4s Capture + Layer Shelves (No importmap)</title>
+  <title>Tesseract Installation — Flickr Shelves</title>
   <style>
     html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#000; }
     #app { position:fixed; inset:0; }
+
     #hud {
       position:fixed; left:12px; top:12px; color:#eaeaea;
       font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
@@ -14,7 +15,7 @@
       border: 1px solid rgba(255,255,255,.12);
       border-radius: 12px;
       padding: 10px 12px;
-      max-width: min(560px, calc(100vw - 24px));
+      max-width: min(720px, calc(100vw - 24px));
       backdrop-filter: blur(8px);
       user-select:none;
       z-index: 10;
@@ -22,6 +23,25 @@
     #hud b { color:#fff; }
     #hud .row { opacity:.92; }
     #hud .dim { opacity:.65; }
+    #hud input {
+      width: 260px;
+      padding: 6px 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(0,0,0,.35);
+      color: #fff;
+      outline: none;
+      margin-left: 8px;
+    }
+    #hud button {
+      margin-left: 8px;
+      padding: 6px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(0,0,0,.35);
+      color: #fff;
+      cursor: pointer;
+    }
 
     #toast {
       position:fixed; right:12px; bottom:12px;
@@ -37,73 +57,30 @@
     }
     #toast.show { opacity:1; transform: translateY(0); }
 
-    #startOverlay{
-      position:fixed; inset:0;
-      display:flex; align-items:center; justify-content:center;
-      background:rgba(0,0,0,.72);
-      z-index: 9999;
-    }
-    #startOverlay .panel{
-      max-width:min(720px, calc(100vw - 28px));
-      padding:18px 18px;
-      border-radius:18px;
-      border:1px solid rgba(255,255,255,.12);
-      background:rgba(0,0,0,.45);
-      backdrop-filter: blur(10px);
-      color:#fff;
-      font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      text-align:left;
-    }
-    #startOverlay button{
-      margin-top:12px;
-      padding:14px 18px;
-      border-radius:14px;
-      border:1px solid rgba(255,255,255,.2);
-      background:rgba(0,0,0,.45);
-      color:#fff;
-      cursor:pointer;
-      font: 13px ui-monospace, monospace;
-    }
-    #startOverlay .dim { opacity:.7; }
-
     canvas { display:block; }
   </style>
 </head>
-
 <body>
   <div id="app"></div>
 
   <div id="hud">
-    <div class="row"><b>Tesseract Camera Installation</b> — 4s capture → layer-decomposed shelves</div>
+    <div class="row"><b>Tesseract Installation</b> — Flickr → 4s interval → layer-decomposed shelves</div>
     <div class="row dim">棚（前面）：上=輪郭 / 中=低周波(ぼかし) / 下=高周波(テクスチャ)</div>
-    <div class="row dim">棚（背面）：動いた部分だけ（差分マスク）</div>
-    <div class="row">Mouse: ドラッグ回転 / Wheel: ズーム</div>
-    <div class="row">Keys:
-      <b>H</b> HUD,
-      <b>F</b> Fullscreen,
-      <b>M</b> Mirror,
-      <b>C</b> Color mode,
-      <b>[</b>/<b>]</b> slices,
-      <b>1</b> shelves,
-      <b>2</b> tesseract,
-      <b>3</b> dust
+    <div class="row dim">棚（背面）：差分（前回画像との差）</div>
+
+    <div class="row" style="margin-top:8px;">
+      Flickr tags:
+      <input id="tags" value="space,nebula,night" />
+      <button id="apply">Apply</button>
+      <button id="pause">Pause</button>
+    </div>
+
+    <div class="row dim" style="margin-top:6px;">
+      Mouse: ドラッグ回転 / Wheel: ズーム　Keys: <b>H</b> HUD, <b>F</b> Fullscreen, <b>M</b> Mirror, <b>C</b> Color, <b>[</b>/<b>]</b> slices, <b>1</b> shelves, <b>2</b> tesseract, <b>3</b> dust
     </div>
   </div>
 
   <div id="toast"></div>
-
-  <!-- ユーザー操作でカメラ起動（Safari/一部環境対策） -->
-  <div id="startOverlay">
-    <div class="panel">
-      <div><b>START CAMERA</b></div>
-      <div class="dim">この作品はカメラ映像を4秒ごとにキャプチャし、レイヤー分解して棚に配架します。</div>
-      <div class="dim">※ブラウザやOSの仕様で、ユーザー操作なしのカメラ起動が無視されることがあるため、ボタン式にしています。</div>
-      <button id="startBtn">START CAMERA</button>
-      <div class="dim" style="margin-top:10px;">
-        カメラを許可しなくても、フォールバック（ノイズ素材）で動作は継続します。
-      </div>
-    </div>
-  </div>
 
 <script type="module">
 /* ---------------------------------------------------------
@@ -128,64 +105,81 @@ function toast(msg){
 }
 
 /* ------------------------------
-   Webcam
+   Flickr Public Feed (JSONP, no API key)
+   - tags=comma,separated
+   - returns { items: [ { media: { m: url }, title, author, link, ... }, ... ] }
 -------------------------------- */
-const video = document.createElement('video');
-video.autoplay = true;
-video.playsInline = true;
-video.muted = true;
+function fetchFlickrPublicFeed(tags){
+  return new Promise((resolve, reject)=>{
+    const cb = `__flickr_cb_${Math.random().toString(36).slice(2)}`;
+    const script = document.createElement('script');
 
-let mirror = true;
-let camReady = false;
+    const clean = (ok, payload)=>{
+      try { delete window[cb]; } catch {}
+      script.remove();
+      ok ? resolve(payload) : reject(payload);
+    };
 
-async function initCamera(){
-  try{
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false
-    });
-    video.srcObject = stream;
-    await video.play();
-    camReady = true;
-    toast("Camera connected");
-    // metadata arrived? if yes -> resize; else wait
-    if (video.readyState >= 1) onVideoReady();
-    else video.addEventListener('loadedmetadata', onVideoReady, { once:true });
-  }catch(err){
-    console.error(err);
-    camReady = false;
-    toast("Camera blocked — using fallback noise");
-  }
+    window[cb] = (data)=> clean(true, data);
+
+    // public feed supports jsoncallback=...
+    const url = new URL('https://www.flickr.com/services/feeds/photos_public.gne');
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('nojsoncallback', '0'); // keep JSONP
+    url.searchParams.set('jsoncallback', cb);
+    url.searchParams.set('tags', tags || 'space,nebula,night');
+
+    script.src = url.toString();
+    script.onerror = ()=> clean(false, new Error('Failed to load Flickr feed (script error)'));
+    document.head.appendChild(script);
+
+    // timeout safety
+    setTimeout(()=>{
+      if (window[cb]) clean(false, new Error('Flickr feed timeout'));
+    }, 8000);
+  });
 }
 
-/* User gesture start */
-const overlay = document.getElementById('startOverlay');
-document.getElementById('startBtn').addEventListener('click', async ()=>{
-  overlay.style.display = 'none';
-  await initCamera();
-});
+async function loadImage(url){
+  // Try to load with CORS so canvas->WebGL upload stays valid.
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = ()=> resolve(img);
+    img.onerror = ()=> reject(new Error('Image load failed'));
+    img.src = url;
+  });
+}
 
 /* ------------------------------
-   Atlas: time-shelves, each shelf has 4 bands:
-   [0] edge, [1] low-pass blur, [2] high-pass, [3] diff mask
-   Capture every 4 seconds, newest at top, old pushed down & discarded.
+   Atlas: shelves store 4 bands per photo:
+   [0] edge, [1] low-pass blur, [2] high-pass, [3] diff vs previous photo
 -------------------------------- */
-let slices = 36;
-let captureInterval = 4.0;
-let lastCaptureT = -999;
+let slices = 36;               // number of photos stored
+let intervalSec = 4.0;         // every 4 seconds
+let lastInsertT = -999;
 
 let atlasW = 640;
-let baseSliceH = 360;        // one band height
-let sliceH = baseSliceH * 4; // one shelf height = 4 bands
+let baseSliceH = 360;
+let sliceH = baseSliceH * 4;
 let atlasH = sliceH * slices;
 
 const atlas = document.createElement('canvas');
 const actx = atlas.getContext('2d', { willReadFrequently: true });
 
-function resizeAtlasFromVideoOrFallback(){
-  const vw = (camReady && video.videoWidth) ? video.videoWidth : 1280;
-  const vh = (camReady && video.videoHeight) ? video.videoHeight : 720;
+// Firefox-safe shift buffer (avoid drawing atlas onto itself)
+const shiftC = document.createElement('canvas');
+const shiftCtx = shiftC.getContext('2d', { willReadFrequently: true });
 
+// temp canvases for layer processing (NO getImageData route by design)
+const origC = document.createElement('canvas');
+const blurC = document.createElement('canvas');
+const edgeC = document.createElement('canvas');
+const highC = document.createElement('canvas');
+const diffC = document.createElement('canvas');
+const prevC = document.createElement('canvas'); // previous photo for diff
+
+function resizeAtlasForAspect(vw, vh){
   atlasW = 640;
   baseSliceH = Math.round(atlasW * (vh / vw));
   sliceH = baseSliceH * 4;
@@ -193,39 +187,41 @@ function resizeAtlasFromVideoOrFallback(){
 
   atlas.width = atlasW;
   atlas.height = atlasH;
-
-// shift buffer: atlasから最上段( sliceH )を除いた領域だけを保持
-shiftC.width = atlasW;
-shiftC.height = Math.max(1, atlasH - sliceH);
-
-  actx.fillStyle = "#000";
+  actx.fillStyle = '#000';
   actx.fillRect(0,0,atlasW,atlasH);
-}
 
-const origC = document.createElement('canvas');
-const blurC = document.createElement('canvas');
-const edgeC = document.createElement('canvas');
-const highC = document.createElement('canvas');
-const diffC = document.createElement('canvas');
-const prevC = document.createElement('canvas'); // previous capture for diff fallback
-const shiftC = document.createElement('canvas'); // atlas自己コピー回避用
-const shiftCtx = shiftC.getContext('2d', { willReadFrequently: true });
+  // shift buffer holds atlas excluding top shelf
+  shiftC.width = atlasW;
+  shiftC.height = Math.max(1, atlasH - sliceH);
 
-function syncTempCanvases(){
   for (const c of [origC, blurC, edgeC, highC, diffC, prevC]){
     c.width = atlasW;
     c.height = baseSliceH;
   }
 }
 
-function drawVideoTo(ctx){
+resizeAtlasForAspect(16, 9);
+
+/* draw image into origC with cover-crop */
+let mirror = true;
+function drawImageCover(ctx, img){
+  const cw = atlasW, ch = baseSliceH;
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+
+  const scale = Math.max(cw / iw, ch / ih);
+  const sw = cw / scale;
+  const sh = ch / scale;
+  const sx = (iw - sw) * 0.5;
+  const sy = (ih - sh) * 0.5;
+
   ctx.save();
-  ctx.clearRect(0,0,atlasW,baseSliceH);
+  ctx.clearRect(0,0,cw,ch);
   if (mirror){
-    ctx.translate(atlasW, 0);
+    ctx.translate(cw, 0);
     ctx.scale(-1, 1);
   }
-  ctx.drawImage(video, 0, 0, atlasW, baseSliceH);
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cw, ch);
   ctx.restore();
 }
 
@@ -244,64 +240,8 @@ function genFallbackNoise(ctx, t){
   ctx.putImageData(img, 0, 0);
 }
 
-/* CPU route helpers */
-let prevCaptureLum = null;
-
-function computeLuminanceArray(imgData){
-  const d = imgData.data;
-  const lum = new Float32Array(atlasW * baseSliceH);
-  for (let i=0, p=0; i<d.length; i+=4, p++){
-    const r = d[i], g = d[i+1], b = d[i+2];
-    lum[p] = 0.2126*r + 0.7152*g + 0.0722*b;
-  }
-  return lum;
-}
-
-function sobelEdgeFromLum(lum){
-  const out = new Uint8ClampedArray(atlasW * baseSliceH * 4);
-  const w = atlasW, h = baseSliceH;
-
-  for (let y=1; y<h-1; y++){
-    for (let x=1; x<w-1; x++){
-      const i = y*w + x;
-      const tl = lum[(y-1)*w + (x-1)];
-      const tc = lum[(y-1)*w + (x)];
-      const tr = lum[(y-1)*w + (x+1)];
-      const ml = lum[(y)*w + (x-1)];
-      const mr = lum[(y)*w + (x+1)];
-      const bl = lum[(y+1)*w + (x-1)];
-      const bc = lum[(y+1)*w + (x)];
-      const br = lum[(y+1)*w + (x+1)];
-
-      const gx = (-1*tl) + (1*tr) + (-2*ml) + (2*mr) + (-1*bl) + (1*br);
-      const gy = (-1*tl) + (-2*tc) + (-1*tr) + (1*bl) + (2*bc) + (1*br);
-
-      let g = Math.sqrt(gx*gx + gy*gy);
-      g = clamp(g * 0.9, 0, 255);
-
-      const o = i*4;
-      out[o+0] = g;
-      out[o+1] = g;
-      out[o+2] = g;
-      out[o+3] = 255;
-    }
-  }
-  return out;
-}
-
-/* Capture every 4s, layer split, with fallback if getImageData blocked */
-function captureAndInsert(t){
-  // shift old shelves down by one shelf
-// --- shift old shelves down safely (Firefox: avoid drawing atlas onto itself)
-  const copyH = atlasH - sliceH;
-  if (copyH > 0) {
-    // atlas上部(copyH)をshiftCへコピー
-    shiftCtx.clearRect(0, 0, shiftC.width, shiftC.height);
-    shiftCtx.drawImage(atlas, 0, 0, atlasW, copyH, 0, 0, atlasW, copyH);
-    // shiftCをatlasへ下に貼り戻す
-    actx.drawImage(shiftC, 0, 0, atlasW, copyH, 0, sliceH, atlasW, copyH);
-  }
-
+/* layer decomposition using composite-only (no pixel reads) */
+function buildLayersFromOrig(t){
   const octx = origC.getContext('2d', { willReadFrequently:true });
   const bctx = blurC.getContext('2d', { willReadFrequently:true });
   const ectx = edgeC.getContext('2d', { willReadFrequently:true });
@@ -309,155 +249,118 @@ function captureAndInsert(t){
   const dctx = diffC.getContext('2d', { willReadFrequently:true });
   const pctx = prevC.getContext('2d', { willReadFrequently:true });
 
-  // orig
-  if (camReady && video.videoWidth > 0) drawVideoTo(octx);
-  else genFallbackNoise(octx, t);
-
   // low-pass blur
   bctx.save();
   bctx.clearRect(0,0,atlasW,baseSliceH);
-  bctx.filter = 'blur(10px)';
+  bctx.filter = 'blur(12px)';
   bctx.drawImage(origC, 0, 0);
   bctx.restore();
 
-  try {
-    // CPU route (may be blocked by privacy/spoofer)
-    const origImg = octx.getImageData(0,0,atlasW,baseSliceH);
-    const blurImg = bctx.getImageData(0,0,atlasW,baseSliceH);
+  // edge (pseudo): difference of shifted copies
+  ectx.save();
+  ectx.clearRect(0,0,atlasW,baseSliceH);
+  ectx.filter = 'contrast(280%)';
+  ectx.globalCompositeOperation = 'source-over';
+  ectx.drawImage(origC, 0, 0);
+  ectx.globalCompositeOperation = 'difference';
+  ectx.drawImage(origC, 1, 0);
+  ectx.drawImage(origC, 0, 1);
+  ectx.globalCompositeOperation = 'source-over';
+  ectx.restore();
 
-    const lum = computeLuminanceArray(origImg);
+  // high-pass: gray then difference(orig, blur)
+  hctx.save();
+  hctx.clearRect(0,0,atlasW,baseSliceH);
+  hctx.filter = 'contrast(190%) brightness(110%)';
+  hctx.fillStyle = 'rgb(128,128,128)';
+  hctx.fillRect(0,0,atlasW,baseSliceH);
+  hctx.globalCompositeOperation = 'difference';
+  hctx.drawImage(blurC, 0, 0);
+  hctx.globalCompositeOperation = 'difference';
+  hctx.drawImage(origC, 0, 0);
+  hctx.globalCompositeOperation = 'source-over';
+  hctx.restore();
 
-    // edge sobel
-    const edgeRGBA = sobelEdgeFromLum(lum);
-    ectx.putImageData(new ImageData(edgeRGBA, atlasW, baseSliceH), 0, 0);
+  // diff vs previous photo
+  dctx.save();
+  dctx.clearRect(0,0,atlasW,baseSliceH);
+  dctx.filter = 'contrast(320%)';
+  dctx.globalCompositeOperation = 'source-over';
+  dctx.drawImage(origC, 0, 0);
+  dctx.globalCompositeOperation = 'difference';
+  dctx.drawImage(prevC, 0, 0);
+  dctx.globalCompositeOperation = 'source-over';
+  dctx.restore();
 
-    // high-pass
-    const hi = hctx.createImageData(atlasW, baseSliceH);
-    const od = origImg.data, bd = blurImg.data, hd = hi.data;
-    for (let i=0; i<od.length; i+=4){
-      hd[i]   = clamp((od[i]   - bd[i])   * 2 + 128, 0, 255);
-      hd[i+1] = clamp((od[i+1] - bd[i+1]) * 2 + 128, 0, 255);
-      hd[i+2] = clamp((od[i+2] - bd[i+2]) * 2 + 128, 0, 255);
-      hd[i+3] = 255;
-    }
-    hctx.putImageData(hi, 0, 0);
-
-    // diff mask vs previous capture luminance
-    const di = dctx.createImageData(atlasW, baseSliceH);
-    const dd = di.data;
-    if (!prevCaptureLum) prevCaptureLum = new Float32Array(lum.length);
-
-    for (let p=0, i=0; p<lum.length; p++, i+=4){
-      const diff = Math.abs(lum[p] - prevCaptureLum[p]);
-      let v = (diff - 12.0) * 5.0; // sensitivity
-      v = clamp(v, 0, 255);
-      dd[i] = v; dd[i+1] = v; dd[i+2] = v; dd[i+3] = 255;
-      prevCaptureLum[p] = lum[p];
-    }
-    dctx.putImageData(di, 0, 0);
-
-  } catch (err) {
-    console.warn("Canvas read blocked; using composite fallback:", err);
-
-    // Fallback: no getImageData (composite-only)
-    // edge (pseudo): difference of shifted copies
-    ectx.save();
-    ectx.clearRect(0,0,atlasW,baseSliceH);
-    ectx.filter = 'contrast(250%)';
-    ectx.globalCompositeOperation = 'source-over';
-    ectx.drawImage(origC, 0, 0);
-    ectx.globalCompositeOperation = 'difference';
-    ectx.drawImage(origC, 1, 0);
-    ectx.drawImage(origC, 0, 1);
-    ectx.globalCompositeOperation = 'source-over';
-    ectx.restore();
-
-    // high-pass: gray then difference(orig, blur)
-    hctx.save();
-    hctx.clearRect(0,0,atlasW,baseSliceH);
-    hctx.filter = 'contrast(180%) brightness(110%)';
-    hctx.fillStyle = 'rgb(128,128,128)';
-    hctx.fillRect(0,0,atlasW,baseSliceH);
-    hctx.globalCompositeOperation = 'difference';
-    hctx.drawImage(blurC, 0, 0);
-    hctx.globalCompositeOperation = 'difference';
-    hctx.drawImage(origC, 0, 0);
-    hctx.globalCompositeOperation = 'source-over';
-    hctx.restore();
-
-    // diff mask: difference between current orig and prevC
-    dctx.save();
-    dctx.clearRect(0,0,atlasW,baseSliceH);
-    dctx.filter = 'contrast(300%)';
-    dctx.globalCompositeOperation = 'source-over';
-    dctx.drawImage(origC, 0, 0);
-    dctx.globalCompositeOperation = 'difference';
-    dctx.drawImage(prevC, 0, 0);
-    dctx.globalCompositeOperation = 'source-over';
-    dctx.restore();
-  }
-
-  // store current as prevC for next fallback-diff
+  // update prevC = orig
   pctx.clearRect(0,0,atlasW,baseSliceH);
   pctx.drawImage(origC, 0, 0);
+}
 
-  // write bands into atlas top shelf
+/* shift shelves down (Firefox-safe), then write top shelf bands */
+function insertTopShelf(){
+  const copyH = atlasH - sliceH;
+  if (copyH > 0){
+    shiftCtx.clearRect(0,0,shiftC.width,shiftC.height);
+    shiftCtx.drawImage(atlas, 0, 0, atlasW, copyH, 0, 0, atlasW, copyH);
+    actx.drawImage(shiftC, 0, 0, atlasW, copyH, 0, sliceH, atlasW, copyH);
+  }
+
+  // write bands into top shelf
   actx.drawImage(edgeC, 0, 0, atlasW, baseSliceH, 0, 0*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(blurC, 0, 0, atlasW, baseSliceH, 0, 1*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(highC, 0, 0, atlasW, baseSliceH, 0, 2*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(diffC, 0, 0, atlasW, baseSliceH, 0, 3*baseSliceH, atlasW, baseSliceH);
 
   // slight fade
-  actx.fillStyle = "rgba(0,0,0,0.03)";
+  actx.fillStyle = 'rgba(0,0,0,0.03)';
   actx.fillRect(0,0,atlasW,sliceH);
-
-  toast("Captured ✓");
 }
 
 /* ------------------------------
-   Motion detection (still per frame)
+   Feed buffer management
 -------------------------------- */
-const mW = 96, mH = 54;
-const motionCanvas = document.createElement('canvas');
-motionCanvas.width = mW; motionCanvas.height = mH;
-const mctx = motionCanvas.getContext('2d', { willReadFrequently: true });
+let currentTags = document.getElementById('tags').value.trim();
+let feedQueue = [];
+let inFlightFetch = false;
 
-let prevMotionFrame = null;
-let motion = 0;
-let motionRaw = 0;
+async function refillQueue(){
+  if (inFlightFetch) return;
+  inFlightFetch = true;
+  try{
+    const data = await fetchFlickrPublicFeed(currentTags);
+    const urls = (data?.items || [])
+      .map(it => it?.media?.m)
+      .filter(Boolean);
 
-function updateMotion(){
-  if (!(camReady && video.videoWidth > 0)) {
-    motionRaw = 0.12 * (Math.sin(performance.now()*0.001) * 0.5 + 0.5);
-    motion = lerp(motion, motionRaw, 0.05);
-    return;
+    // shuffle a bit
+    for (let i = urls.length - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      [urls[i], urls[j]] = [urls[j], urls[i]];
+    }
+    feedQueue = urls;
+    toast(`Flickr loaded: ${feedQueue.length} items`);
+  }catch(e){
+    console.error(e);
+    toast('Flickr fetch failed (fallback noise)');
+    feedQueue = [];
+  }finally{
+    inFlightFetch = false;
   }
-  mctx.save();
-  mctx.clearRect(0,0,mW,mH);
-  if (mirror){
-    mctx.translate(mW,0);
-    mctx.scale(-1,1);
-  }
-  mctx.drawImage(video, 0, 0, mW, mH);
-  mctx.restore();
+}
 
-  const data = mctx.getImageData(0,0,mW,mH).data;
-  if (!prevMotionFrame) {
-    prevMotionFrame = new Uint8ClampedArray(data);
-    motionRaw = 0;
-    return;
+async function nextPhoto(){
+  if (feedQueue.length < 6) refillQueue(); // async
+  const url = feedQueue.shift();
+  if (!url) return null;
+
+  try{
+    const img = await loadImage(url);
+    return { img, url };
+  }catch(e){
+    console.warn('Image failed:', url, e);
+    return null;
   }
-  let sum = 0;
-  for (let i=0; i<data.length; i+=4){
-    const r = data[i], g = data[i+1], b = data[i+2];
-    const pr = prevMotionFrame[i], pg = prevMotionFrame[i+1], pb = prevMotionFrame[i+2];
-    const lum = (0.2126*r + 0.7152*g + 0.0722*b);
-    const plum = (0.2126*pr + 0.7152*pg + 0.0722*pb);
-    sum += Math.abs(lum - plum);
-    prevMotionFrame[i] = r; prevMotionFrame[i+1] = g; prevMotionFrame[i+2] = b; prevMotionFrame[i+3] = 255;
-  }
-  motionRaw = clamp(sum / (mW*mH) / 55, 0, 1);
-  motion = lerp(motion, motionRaw, 0.08);
 }
 
 /* ------------------------------
@@ -485,10 +388,6 @@ const dir = new THREE.DirectionalLight(0xffffff, 0.55);
 dir.position.set(2, 3, 1);
 scene.add(dir);
 
-/* Init atlas with fallback sizes immediately so it never renders black */
-resizeAtlasFromVideoOrFallback();
-syncTempCanvases();
-
 /* atlas texture */
 const atlasTex = new THREE.CanvasTexture(atlas);
 atlasTex.minFilter = THREE.LinearFilter;
@@ -496,10 +395,10 @@ atlasTex.magFilter = THREE.LinearFilter;
 atlasTex.wrapS = THREE.ClampToEdgeWrapping;
 atlasTex.wrapT = THREE.ClampToEdgeWrapping;
 
-/* ------------------------------
-   Shelf shader (front: 3-band layout, back: diff-only)
--------------------------------- */
+/* shader uniforms */
 let colorMode = 0;
+let motion = 0.12;            // synthetic motion
+let motionPulse = 0.0;        // pulse when new photo inserted
 
 const baseUniforms = {
   uAtlas: { value: atlasTex },
@@ -647,15 +546,12 @@ const shelvesMat = new THREE.ShaderMaterial({
   `
 });
 
-/* ------------------------------
-   Shelves build: each time-slice = front plane + back diff plane
--------------------------------- */
+/* shelves group */
 const shelvesGroup = new THREE.Group();
 scene.add(shelvesGroup);
-
 let shelvesEnabled = true;
 
-function buildShelves(){
+function rebuildShelves(){
   while (shelvesGroup.children.length) shelvesGroup.remove(shelvesGroup.children[0]);
 
   baseUniforms.uAtlasSize.value.set(atlasW, atlasH);
@@ -669,7 +565,6 @@ function buildShelves(){
 
   const count = slices;
   for (let i=0; i<count; i++){
-    // front
     const mFront = shelvesMat.clone();
     mFront.uniforms = THREE.UniformsUtils.clone(baseUniforms);
     mFront.uniforms.uSliceIndex.value = i;
@@ -689,10 +584,8 @@ function buildShelves(){
 
     const s = lerp(1.04, 0.78, k);
     front.scale.setScalar(s);
-
     shelvesGroup.add(front);
 
-    // back diff
     const mDiff = shelvesMat.clone();
     mDiff.uniforms = THREE.UniformsUtils.clone(baseUniforms);
     mDiff.uniforms.uSliceIndex.value = i;
@@ -703,13 +596,12 @@ function buildShelves(){
     back.position.copy(front.position);
     back.rotation.copy(front.rotation);
     back.scale.copy(front.scale);
-
     back.position.z -= 0.18;
     back.scale.multiplyScalar(1.02);
-
     shelvesGroup.add(back);
   }
 }
+rebuildShelves();
 
 /* ------------------------------
    4D Tesseract wireframe
@@ -840,50 +732,90 @@ function updateDust(m){
 }
 
 /* ------------------------------
-   On video metadata ready: resize everything and rebuild shelves
+   Main insert pipeline (Flickr -> layers -> atlas -> texture)
 -------------------------------- */
-function onVideoReady(){
-  // re-fit atlas sizes to camera aspect
-  resizeAtlasFromVideoOrFallback();
-  syncTempCanvases();
-  prevCaptureLum = null;
-  // update uniforms sizes after rebuild
-  buildShelves();
+let running = true;
+let inserting = false;
+let lastMeta = '';
+
+async function insertFromFlickr(t){
+  if (inserting) return;
+  inserting = true;
+
+  // try to get a photo
+  let payload = await nextPhoto();
+  const octx = origC.getContext('2d', { willReadFrequently:true });
+
+  if (payload && payload.img){
+    const img = payload.img;
+
+    // if aspect changed a lot, rebuild atlas/shelves
+    const vw = img.naturalWidth || img.width || 16;
+    const vh = img.naturalHeight || img.height || 9;
+    const newBase = Math.round(atlasW * (vh / vw));
+    if (newBase !== baseSliceH){
+      resizeAtlasForAspect(vw, vh);
+      rebuildShelves();
+      baseUniforms.uAtlasSize.value.set(atlasW, atlasH);
+      baseUniforms.uSliceH.value = sliceH;
+      baseUniforms.uSlices.value = slices;
+      atlasTex.needsUpdate = true;
+    }
+
+    drawImageCover(octx, img);
+    lastMeta = payload.url;
+    toast('Flickr inserted ✓');
+  } else {
+    genFallbackNoise(octx, t);
+    lastMeta = '(fallback noise)';
+    toast('Fallback inserted ✓');
+  }
+
+  buildLayersFromOrig(t);
+  insertTopShelf();
   atlasTex.needsUpdate = true;
-  toast("Video metadata ready ✓");
+
+  // pulse for animation
+  motionPulse = 1.0;
+
+  inserting = false;
 }
 
-/* Build shelves now (fallback sizes) */
-buildShelves();
+/* initial fill */
+refillQueue();
 
 /* ------------------------------
-   Main loop
+   Animation loop
 -------------------------------- */
 let last = performance.now();
 
-function ensureFirstCapture(t){
-  if (lastCaptureT < -100) {
-    captureAndInsert(t);
-    lastCaptureT = t;
-    atlasTex.needsUpdate = true;
+function ensureFirstInsert(t){
+  if (lastInsertT < -100) {
+    // initialize prevC with something non-empty
+    const pctx = prevC.getContext('2d', { willReadFrequently:true });
+    genFallbackNoise(pctx, t);
+    insertFromFlickr(t);
+    lastInsertT = t;
   }
 }
 
 function animate(now){
   const t = now * 0.001;
+  const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
 
-  updateMotion();
+  ensureFirstInsert(t);
 
-  ensureFirstCapture(t);
-
-  if (t - lastCaptureT >= captureInterval){
-    // if camera just became available and aspect changed, we already handle onVideoReady
-    captureAndInsert(t);
-    lastCaptureT = t;
-    atlasTex.needsUpdate = true;
+  if (running && (t - lastInsertT >= intervalSec)){
+    insertFromFlickr(t);
+    lastInsertT = t;
   }
 
+  // synthetic motion: base + pulse decay
+  motionPulse = Math.max(0, motionPulse - dt * 0.55);
+  motion = clamp(0.10 + 0.65*motionPulse + 0.10*Math.sin(t*0.7), 0, 1);
+
+  // update uniforms across shelf materials
   shelvesGroup.traverse(obj=>{
     if (obj.isMesh && obj.material && obj.material.uniforms){
       obj.material.uniforms.uTime.value = t;
@@ -923,13 +855,29 @@ addEventListener('resize', ()=>{
 });
 
 /* ------------------------------
-   Hotkeys
+   UI / Controls
 -------------------------------- */
+document.getElementById('apply').addEventListener('click', async ()=>{
+  currentTags = document.getElementById('tags').value.trim() || 'space,nebula,night';
+  toast('Loading Flickr…');
+  feedQueue = [];
+  await refillQueue();
+});
+
+document.getElementById('pause').addEventListener('click', ()=>{
+  running = !running;
+  document.getElementById('pause').textContent = running ? 'Pause' : 'Resume';
+  toast(running ? 'Running' : 'Paused');
+});
+
+/* Hotkeys */
 const hud = document.getElementById('hud');
 addEventListener('keydown', (e)=>{
   const k = e.key.toLowerCase();
   if (k === 'h'){
-    hud.style.display = (hud.style.display === 'none') ? 'block' : 'none';
+    hud.style.display = (hud.style.display === 'none') ? 'block' : 'block';
+    if (hud.style.display === 'none') hud.style.display = 'block';
+    else hud.style.display = 'none';
     toast(hud.style.display === 'none' ? "HUD hidden" : "HUD shown");
   }
   if (k === 'f'){
@@ -947,19 +895,15 @@ addEventListener('keydown', (e)=>{
   }
   if (k === '['){
     slices = clamp(slices - 4, 12, 96);
-    resizeAtlasFromVideoOrFallback();
-    syncTempCanvases();
-    prevCaptureLum = null;
-    buildShelves();
+    resizeAtlasForAspect(16, 9);
+    rebuildShelves();
     atlasTex.needsUpdate = true;
     toast("Slices: " + slices);
   }
   if (k === ']'){
     slices = clamp(slices + 4, 12, 96);
-    resizeAtlasFromVideoOrFallback();
-    syncTempCanvases();
-    prevCaptureLum = null;
-    buildShelves();
+    resizeAtlasForAspect(16, 9);
+    rebuildShelves();
     atlasTex.needsUpdate = true;
     toast("Slices: " + slices);
   }
@@ -967,6 +911,15 @@ addEventListener('keydown', (e)=>{
   if (k === '2'){ tesseractEnabled = !tesseractEnabled; toast("Tesseract: " + (tesseractEnabled?"ON":"OFF")); }
   if (k === '3'){ dustEnabled = !dustEnabled; toast("Dust: " + (dustEnabled?"ON":"OFF")); }
 });
+
+/* Start: show something immediately even before Flickr returns */
+(function warmStart(){
+  const octx = origC.getContext('2d', { willReadFrequently:true });
+  genFallbackNoise(octx, performance.now()*0.001);
+  buildLayersFromOrig(performance.now()*0.001);
+  insertTopShelf();
+  atlasTex.needsUpdate = true;
+})();
 </script>
 </body>
 </html>
