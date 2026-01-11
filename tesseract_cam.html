@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Tesseract Camera Installation (Single-file)</title>
+  <title>Tesseract Camera Installation — 4s Capture + Layer Shelves</title>
   <style>
     html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#000; }
     #app { position:fixed; inset:0; }
@@ -14,7 +14,7 @@
       border: 1px solid rgba(255,255,255,.12);
       border-radius: 12px;
       padding: 10px 12px;
-      max-width: min(520px, calc(100vw - 24px));
+      max-width: min(560px, calc(100vw - 24px));
       backdrop-filter: blur(8px);
       user-select:none;
     }
@@ -33,15 +33,25 @@
       pointer-events:none;
     }
     #toast.show { opacity:1; transform: translateY(0); }
-    a { color:#cfe8ff; }
     canvas { display:block; }
   </style>
+
+  <!-- GitHub Pages / bare import 対策 -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
 </head>
 <body>
   <div id="app"></div>
   <div id="hud">
-    <div class="row"><b>Tesseract Camera Installation</b> ? Interstellar-ish “5D shelves”</div>
-    <div class="row dim">Tips: 動くほど歪み/回転が増えます（モーション検出）</div>
+    <div class="row"><b>Tesseract Camera Installation</b> — 4s capture → layer-decomposed shelves</div>
+    <div class="row dim">棚（前面）：上=輪郭 / 中=低周波(ぼかし) / 下=高周波(テクスチャ)</div>
+    <div class="row dim">棚（背面）：動いた部分だけ（差分マスク）</div>
     <div class="row">Mouse: ドラッグ回転 / Wheel: ズーム</div>
     <div class="row">Keys:
       <b>H</b> HUD,
@@ -53,27 +63,13 @@
       <b>2</b> tesseract,
       <b>3</b> dust
     </div>
-    <div class="row dim">Camera requires https or localhost.</div>
   </div>
   <div id="toast"></div>
-
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-  }
-}
-</script>
-
 
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-/* ------------------------------
-   Utilities
--------------------------------- */
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const lerp  = (a, b, t) => a + (b - a) * t;
 
@@ -87,9 +83,7 @@ function toast(msg){
 }
 
 /* ------------------------------
-   Webcam + Time-Atlas (past frames)
-   We store past frames in a single tall canvas (atlas).
-   Each "slice" is one past frame -> sampled in shader.
+   Webcam
 -------------------------------- */
 const video = document.createElement('video');
 video.autoplay = true;
@@ -112,34 +106,35 @@ async function initCamera(){
   }catch(err){
     console.error(err);
     camReady = false;
-    toast("Camera blocked ? using fallback noise");
+    toast("Camera blocked — using fallback noise");
   }
 }
 await initCamera();
 
-/* Atlas canvas setup */
-let slices = 36;           // number of time shelves (frames)
-let atlasW = 512;          // will be set after video metadata
-let atlasH = 512 * slices;
+/* ------------------------------
+   Atlas: time-shelves, but each time-shelf contains 4 bands:
+   [0] edge, [1] low-pass, [2] high-pass, [3] diff-mask
+   We capture every 4 seconds (not every frame).
+-------------------------------- */
+let slices = 36;               // how many captures stored
+let captureInterval = 4.0;     // seconds
+let lastCaptureT = -999;
+
+let atlasW = 640;
+let baseSliceH = 360;          // height of one band (one processed layer)
+let sliceH = baseSliceH * 4;   // one time-shelf contains 4 bands stacked
+let atlasH = sliceH * slices;
+
 const atlas = document.createElement('canvas');
 const actx = atlas.getContext('2d', { willReadFrequently: true });
-
-/* motion detection (low-res) */
-const mW = 96, mH = 54;
-const motionCanvas = document.createElement('canvas');
-motionCanvas.width = mW; motionCanvas.height = mH;
-const mctx = motionCanvas.getContext('2d', { willReadFrequently: true });
-let prevMotionFrame = null;
-let motion = 0;        // smoothed motion energy
-let motionRaw = 0;
 
 function resizeAtlasFromVideo(){
   const vw = Math.max(2, video.videoWidth || 1280);
   const vh = Math.max(2, video.videoHeight || 720);
 
-  // Keep atlas width moderate for performance; preserve aspect ratio per slice.
   atlasW = 640;
-  const sliceH = Math.round(atlasW * (vh / vw));
+  baseSliceH = Math.round(atlasW * (vh / vw));
+  sliceH = baseSliceH * 4;
   atlasH = sliceH * slices;
 
   atlas.width = atlasW;
@@ -147,58 +142,195 @@ function resizeAtlasFromVideo(){
 
   actx.fillStyle = "#000";
   actx.fillRect(0,0,atlasW,atlasH);
-
-  return { sliceH };
 }
 
-let sliceH = 360;
 if (camReady) {
-  if (video.readyState >= 1) ({ sliceH } = resizeAtlasFromVideo());
-  else video.addEventListener('loadedmetadata', () => ({ sliceH } = resizeAtlasFromVideo()), { once:true });
+  if (video.readyState >= 1) resizeAtlasFromVideo();
+  else video.addEventListener('loadedmetadata', () => resizeAtlasFromVideo(), { once:true });
 } else {
-  // fallback size
-  sliceH = 360;
-  atlasW = 640;
-  atlasH = sliceH * slices;
-  atlas.width = atlasW;
-  atlas.height = atlasH;
+  resizeAtlasFromVideo();
 }
 
-/* update atlas: shift down and draw newest frame on top */
-function updateAtlas(){
-  // shift old frames down by one slice
+/* temp canvases for processing */
+const origC = document.createElement('canvas');
+const blurC = document.createElement('canvas');
+const edgeC = document.createElement('canvas');
+const highC = document.createElement('canvas');
+const diffC = document.createElement('canvas');
+
+function syncTempCanvases(){
+  for (const c of [origC, blurC, edgeC, highC, diffC]){
+    c.width = atlasW;
+    c.height = baseSliceH;
+  }
+}
+syncTempCanvases();
+
+let prevCaptureLum = null; // Float32Array(atlasW*baseSliceH) luminance of previous capture
+
+function drawVideoTo(ctx){
+  ctx.save();
+  ctx.clearRect(0,0,atlasW,baseSliceH);
+  if (mirror){
+    ctx.translate(atlasW, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(video, 0, 0, atlasW, baseSliceH);
+  ctx.restore();
+}
+
+function genFallbackNoise(ctx, t){
+  const img = ctx.createImageData(atlasW, baseSliceH);
+  for (let i=0; i<img.data.length; i+=4){
+    const x = ((i/4) % atlasW) / atlasW;
+    const y = Math.floor((i/4) / atlasW) / baseSliceH;
+    const v = (Math.sin(20*x + 7*y + t*2) + Math.sin(13*x - 11*y + t*1.3)) * 0.5;
+    const n = (v*0.5+0.5) * 255;
+    img.data[i+0] = n;
+    img.data[i+1] = n*0.8;
+    img.data[i+2] = n*0.6;
+    img.data[i+3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function computeLuminanceArray(imgData){
+  const d = imgData.data;
+  const lum = new Float32Array(atlasW * baseSliceH);
+  for (let i=0, p=0; i<d.length; i+=4, p++){
+    const r = d[i], g = d[i+1], b = d[i+2];
+    lum[p] = 0.2126*r + 0.7152*g + 0.0722*b;
+  }
+  return lum;
+}
+
+// simple Sobel edge on luminance (every 4 secなので重くてもOK)
+function sobelEdgeFromLum(lum){
+  const out = new Uint8ClampedArray(atlasW * baseSliceH * 4);
+  const w = atlasW, h = baseSliceH;
+
+  for (let y=1; y<h-1; y++){
+    for (let x=1; x<w-1; x++){
+      const i = y*w + x;
+
+      const tl = lum[(y-1)*w + (x-1)];
+      const tc = lum[(y-1)*w + (x)];
+      const tr = lum[(y-1)*w + (x+1)];
+      const ml = lum[(y)*w + (x-1)];
+      const mr = lum[(y)*w + (x+1)];
+      const bl = lum[(y+1)*w + (x-1)];
+      const bc = lum[(y+1)*w + (x)];
+      const br = lum[(y+1)*w + (x+1)];
+
+      const gx = (-1*tl) + (1*tr) + (-2*ml) + (2*mr) + (-1*bl) + (1*br);
+      const gy = (-1*tl) + (-2*tc) + (-1*tr) + (1*bl) + (2*bc) + (1*br);
+
+      let g = Math.sqrt(gx*gx + gy*gy);
+      // boost + clamp
+      g = clamp(g * 0.9, 0, 255);
+
+      const o = i*4;
+      out[o+0] = g;
+      out[o+1] = g;
+      out[o+2] = g;
+      out[o+3] = 255;
+    }
+  }
+  return out;
+}
+
+function captureAndInsert(t){
+  // shift old shelves down by one shelf (sliceH)
   actx.drawImage(atlas, 0, 0, atlasW, atlasH - sliceH, 0, sliceH, atlasW, atlasH - sliceH);
 
-  // draw newest slice at the top
+  // produce orig
+  const octx = origC.getContext('2d', { willReadFrequently:true });
+  const bctx = blurC.getContext('2d', { willReadFrequently:true });
+  const ectx = edgeC.getContext('2d', { willReadFrequently:true });
+  const hctx = highC.getContext('2d', { willReadFrequently:true });
+  const dctx = diffC.getContext('2d', { willReadFrequently:true });
+
   if (camReady && video.videoWidth > 0) {
-    actx.save();
-    if (mirror){
-      actx.translate(atlasW, 0);
-      actx.scale(-1, 1);
-    }
-    actx.drawImage(video, 0, 0, atlasW, sliceH);
-    actx.restore();
+    drawVideoTo(octx);
+
+    // low-pass blur
+    bctx.save();
+    bctx.clearRect(0,0,atlasW,baseSliceH);
+    bctx.filter = 'blur(10px)';
+    // blur input: draw original canvas to preserve mirror already applied
+    bctx.drawImage(origC, 0, 0);
+    bctx.restore();
   } else {
-    // fallback: evolving noise
-    const img = actx.createImageData(atlasW, sliceH);
-    const t = performance.now() * 0.001;
-    for (let i=0; i<img.data.length; i+=4){
-      const x = ((i/4) % atlasW) / atlasW;
-      const y = Math.floor((i/4) / atlasW) / sliceH;
-      const v = (Math.sin(20*x + 7*y + t*2) + Math.sin(13*x - 11*y + t*1.3)) * 0.5;
-      const n = (v*0.5+0.5) * 255;
-      img.data[i+0] = n;
-      img.data[i+1] = n*0.8;
-      img.data[i+2] = n*0.6;
-      img.data[i+3] = 255;
-    }
-    actx.putImageData(img, 0, 0);
+    genFallbackNoise(octx, t);
+    bctx.drawImage(origC, 0, 0);
   }
 
-  // mild persistence glow
-  actx.fillStyle = "rgba(0,0,0,0.04)";
-  actx.fillRect(0, 0, atlasW, sliceH);
+  // read orig & blur for high-pass + diff
+  const origImg = octx.getImageData(0,0,atlasW,baseSliceH);
+  const blurImg = bctx.getImageData(0,0,atlasW,baseSliceH);
+
+  const lum = computeLuminanceArray(origImg);
+
+  // edge
+  const edgeRGBA = sobelEdgeFromLum(lum);
+  const edgeImg = new ImageData(edgeRGBA, atlasW, baseSliceH);
+  ectx.putImageData(edgeImg, 0, 0);
+
+  // high-pass (orig - blur) * 2 + 128
+  const hi = hctx.createImageData(atlasW, baseSliceH);
+  const od = origImg.data;
+  const bd = blurImg.data;
+  const hd = hi.data;
+  for (let i=0; i<od.length; i+=4){
+    const r = (od[i]   - bd[i])   * 2 + 128;
+    const g = (od[i+1] - bd[i+1]) * 2 + 128;
+    const b = (od[i+2] - bd[i+2]) * 2 + 128;
+    hd[i]   = clamp(r, 0, 255);
+    hd[i+1] = clamp(g, 0, 255);
+    hd[i+2] = clamp(b, 0, 255);
+    hd[i+3] = 255;
+  }
+  hctx.putImageData(hi, 0, 0);
+
+  // diff mask vs previous capture luminance
+  const di = dctx.createImageData(atlasW, baseSliceH);
+  const dd = di.data;
+  if (!prevCaptureLum) prevCaptureLum = new Float32Array(lum.length);
+
+  for (let p=0, i=0; p<lum.length; p++, i+=4){
+    const diff = Math.abs(lum[p] - prevCaptureLum[p]);
+    // threshold + boost
+    let v = (diff - 12.0) * 5.0; // adjust sensitivity
+    v = clamp(v, 0, 255);
+    dd[i] = v; dd[i+1] = v; dd[i+2] = v; dd[i+3] = 255;
+    prevCaptureLum[p] = lum[p];
+  }
+  dctx.putImageData(di, 0, 0);
+
+  // write bands into atlas top shelf (y=0..sliceH)
+  // band order: 0=edge, 1=low(blur), 2=high, 3=diff
+  actx.drawImage(edgeC, 0, 0, atlasW, baseSliceH, 0, 0*baseSliceH, atlasW, baseSliceH);
+  actx.drawImage(blurC, 0, 0, atlasW, baseSliceH, 0, 1*baseSliceH, atlasW, baseSliceH);
+  actx.drawImage(highC, 0, 0, atlasW, baseSliceH, 0, 2*baseSliceH, atlasW, baseSliceH);
+  actx.drawImage(diffC, 0, 0, atlasW, baseSliceH, 0, 3*baseSliceH, atlasW, baseSliceH);
+
+  // slight fade to keep it “install-y”
+  actx.fillStyle = "rgba(0,0,0,0.03)";
+  actx.fillRect(0,0,atlasW,sliceH);
+
+  toast("Captured (layer-split) ✓");
 }
+
+/* ------------------------------
+   Motion detection (for interactivity, still per frame)
+-------------------------------- */
+const mW = 96, mH = 54;
+const motionCanvas = document.createElement('canvas');
+motionCanvas.width = mW; motionCanvas.height = mH;
+const mctx = motionCanvas.getContext('2d', { willReadFrequently: true });
+let prevMotionFrame = null;
+let motion = 0;
+let motionRaw = 0;
 
 function updateMotion(){
   if (!(camReady && video.videoWidth > 0)) {
@@ -207,528 +339,9 @@ function updateMotion(){
     return;
   }
   mctx.save();
+  mctx.clearRect(0,0,mW,mH);
   if (mirror){
     mctx.translate(mW,0);
     mctx.scale(-1,1);
   }
   mctx.drawImage(video, 0, 0, mW, mH);
-  mctx.restore();
-
-  const data = mctx.getImageData(0,0,mW,mH).data;
-  if (!prevMotionFrame) {
-    prevMotionFrame = new Uint8ClampedArray(data);
-    motionRaw = 0;
-    return;
-  }
-
-  let sum = 0;
-  for (let i=0; i<data.length; i+=4){
-    const r = data[i], g = data[i+1], b = data[i+2];
-    const pr = prevMotionFrame[i], pg = prevMotionFrame[i+1], pb = prevMotionFrame[i+2];
-    const lum = (0.2126*r + 0.7152*g + 0.0722*b);
-    const plum = (0.2126*pr + 0.7152*pg + 0.0722*pb);
-    sum += Math.abs(lum - plum);
-    prevMotionFrame[i] = r; prevMotionFrame[i+1] = g; prevMotionFrame[i+2] = b; prevMotionFrame[i+3] = 255;
-  }
-
-  motionRaw = clamp(sum / (mW*mH) / 55, 0, 1); // scale
-  motion = lerp(motion, motionRaw, 0.08);
-}
-
-/* ------------------------------
-   Three.js Scene
--------------------------------- */
-const app = document.getElementById('app');
-const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance" });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
-renderer.setClearColor(0x000000, 1);
-app.appendChild(renderer.domElement);
-
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x000000, 0.045);
-
-const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 200);
-camera.position.set(0, 0.9, 3.2);
-
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.06;
-controls.rotateSpeed = 0.6;
-controls.zoomSpeed = 0.8;
-
-const ambient = new THREE.AmbientLight(0xffffff, 0.25);
-scene.add(ambient);
-
-const dir = new THREE.DirectionalLight(0xffffff, 0.55);
-dir.position.set(2, 3, 1);
-scene.add(dir);
-
-/* ------------------------------
-   Atlas Texture
--------------------------------- */
-const atlasTex = new THREE.CanvasTexture(atlas);
-atlasTex.minFilter = THREE.LinearFilter;
-atlasTex.magFilter = THREE.LinearFilter;
-atlasTex.wrapS = THREE.ClampToEdgeWrapping;
-atlasTex.wrapT = THREE.ClampToEdgeWrapping;
-
-/* ------------------------------
-   Shader: sample a specific time-slice row in atlas
-   - "lens" warp
-   - chromatic split
-   - pseudo-4D shear based on slice index and motion
--------------------------------- */
-let colorMode = 0;
-
-const shelvesUniforms = {
-  uAtlas: { value: atlasTex },
-  uAtlasSize: { value: new THREE.Vector2(atlasW, atlasH) },
-  uSliceH: { value: sliceH },
-  uSlices: { value: slices },
-  uTime: { value: 0 },
-  uSliceIndex: { value: 0 },
-  uMotion: { value: 0 },
-  uColorMode: { value: colorMode },
-  uGain: { value: 1.15 },
-};
-
-const shelvesMat = new THREE.ShaderMaterial({
-  transparent: true,
-  depthWrite: false,
-  uniforms: shelvesUniforms,
-  vertexShader: /* glsl */`
-    varying vec2 vUv;
-    varying float vDepth;
-    void main(){
-      vUv = uv;
-      vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      vDepth = -mv.z;
-      gl_Position = projectionMatrix * mv;
-    }
-  `,
-  fragmentShader: /* glsl */`
-    precision highp float;
-    varying vec2 vUv;
-    varying float vDepth;
-
-    uniform sampler2D uAtlas;
-    uniform vec2 uAtlasSize;
-    uniform float uSliceH;
-    uniform float uSlices;
-    uniform float uTime;
-    uniform float uSliceIndex;
-    uniform float uMotion;
-    uniform int uColorMode;
-    uniform float uGain;
-
-    // hash
-    float hash21(vec2 p){
-      p = fract(p*vec2(123.34, 345.45));
-      p += dot(p, p+34.345);
-      return fract(p.x*p.y);
-    }
-
-    vec3 tonemap(vec3 c){
-      // soft filmic-ish
-      c = max(c, 0.0);
-      c = c / (1.0 + c);
-      return pow(c, vec3(0.95));
-    }
-
-    void main(){
-      // map uv to a specific row (time shelf) in atlas
-      float slice = uSliceIndex;
-      float sliceV0 = slice * (uSliceH / uAtlasSize.y);
-      float sliceV1 = (slice+1.0) * (uSliceH / uAtlasSize.y);
-
-      // “tesseract-like” shear: fold uv based on slice and motion
-      float m = uMotion;
-      float t = uTime;
-
-      vec2 uv = vUv;
-      // center for lensing
-      vec2 p = uv - 0.5;
-      float r = length(p);
-
-      // lens warp (increases with motion and slice depth)
-      float depthFactor = clamp((slice / max(uSlices-1.0, 1.0)), 0.0, 1.0);
-      float lens = (0.12 + 0.35*m) * (0.35 + depthFactor);
-      p *= (1.0 + lens * r*r);
-
-      // 4D-ish “swim”
-      float swirl = (0.20 + 0.65*m) * (0.25 + depthFactor);
-      float ang = swirl * sin(t*0.7 + depthFactor*6.283 + p.x*2.0 - p.y*2.0);
-      float cs = cos(ang), sn = sin(ang);
-      p = mat2(cs, -sn, sn, cs) * p;
-
-      // chromatic aberration
-      float ca = (0.002 + 0.01*m) * (0.35 + r);
-      vec2 uvR = p + 0.5 + ca * normalize(p + 1e-5);
-      vec2 uvG = p + 0.5;
-      vec2 uvB = p + 0.5 - ca * normalize(p + 1e-5);
-
-      // clamp within slice and sample
-      float yR = mix(sliceV0, sliceV1, clamp(uvR.y, 0.0, 1.0));
-      float yG = mix(sliceV0, sliceV1, clamp(uvG.y, 0.0, 1.0));
-      float yB = mix(sliceV0, sliceV1, clamp(uvB.y, 0.0, 1.0));
-
-      vec2 stR = vec2(clamp(uvR.x, 0.0, 1.0), yR);
-      vec2 stG = vec2(clamp(uvG.x, 0.0, 1.0), yG);
-      vec2 stB = vec2(clamp(uvB.x, 0.0, 1.0), yB);
-
-      vec3 col;
-      col.r = texture2D(uAtlas, stR).r;
-      col.g = texture2D(uAtlas, stG).g;
-      col.b = texture2D(uAtlas, stB).b;
-
-      // optional color remap modes
-      if (uColorMode == 1) {
-        // spectral-ish
-        float lum = dot(col, vec3(0.2126,0.7152,0.0722));
-        col = vec3(lum, lum*lum, pow(lum, 0.5));
-      } else if (uColorMode == 2) {
-        // inverted cyan-magenta vibe
-        col = 1.0 - col.bgr;
-      }
-
-      // grain + depth glow
-      float g = hash21(gl_FragCoord.xy + t*60.0) - 0.5;
-      col += g * (0.02 + 0.06*m);
-
-      // vignette
-      float vig = smoothstep(0.95, 0.25, r);
-      col *= (0.65 + 0.55*vig);
-
-      // distance fade so shelves feel infinite
-      float fog = smoothstep(1.0, 10.0, vDepth);
-      col *= (1.0 - 0.75*fog);
-
-      col *= uGain;
-
-      // alpha: more transparent for older slices
-      float a = mix(0.42, 0.06, depthFactor);
-      a *= (0.65 + 0.55*vig);
-      a *= (0.65 + 0.9*m);
-
-      col = tonemap(col);
-
-      gl_FragColor = vec4(col, a);
-    }
-  `
-});
-
-/* ------------------------------
-   Shelves geometry (the “library”)
--------------------------------- */
-const shelvesGroup = new THREE.Group();
-scene.add(shelvesGroup);
-
-let shelvesEnabled = true;
-
-function buildShelves(){
-  while (shelvesGroup.children.length) shelvesGroup.remove(shelvesGroup.children[0]);
-
-  // Recompute atlas size uniforms
-  shelvesUniforms.uAtlasSize.value.set(atlasW, atlasH);
-  shelvesUniforms.uSliceH.value = sliceH;
-  shelvesUniforms.uSlices.value = slices;
-
-  // shelf dimensions in world units
-  const aspect = atlasW / sliceH;
-  const w = 1.5 * aspect;
-  const h = 1.5;
-
-  const geo = new THREE.PlaneGeometry(w, h, 1, 1);
-
-  // Arrange slices as a gently bending corridor + side walls (tesseract-y feel)
-  const count = slices;
-  for (let i=0; i<count; i++){
-    const m = shelvesMat.clone();
-    m.uniforms = THREE.UniformsUtils.clone(shelvesUniforms);
-    m.uniforms.uSliceIndex.value = i;
-
-    const mesh = new THREE.Mesh(geo, m);
-
-    const k = i / Math.max(count-1,1);
-    const z = -lerp(0.2, 8.8, k);
-
-    // corridor curve + subtle folding
-    const bend = (k - 0.5);
-    const x = 0.55 * Math.sin(bend * 2.2);
-    const y = 0.12 * Math.sin(bend * 3.0);
-
-    mesh.position.set(x, y, z);
-
-    // rotate shelves so they “arc” around
-    mesh.rotation.y = 0.25 * Math.sin(bend * 2.0);
-    mesh.rotation.x = 0.10 * Math.sin(bend * 1.7);
-
-    // scale older slices slightly smaller -> depth illusion
-    const s = lerp(1.04, 0.78, k);
-    mesh.scale.setScalar(s);
-
-    shelvesGroup.add(mesh);
-
-    // side “echo shelves” (thin ghosts)
-    if (i % 3 === 0) {
-      const ghost = new THREE.Mesh(geo, m.clone());
-      ghost.material.uniforms.uSliceIndex.value = i;
-      ghost.position.set(x + 1.2, y - 0.05, z - 0.12);
-      ghost.rotation.y = mesh.rotation.y + 0.35;
-      ghost.scale.setScalar(s*0.86);
-      shelvesGroup.add(ghost);
-
-      const ghost2 = new THREE.Mesh(geo, m.clone());
-      ghost2.material.uniforms.uSliceIndex.value = i;
-      ghost2.position.set(x - 1.2, y + 0.05, z + 0.08);
-      ghost2.rotation.y = mesh.rotation.y - 0.35;
-      ghost2.scale.setScalar(s*0.86);
-      shelvesGroup.add(ghost2);
-    }
-  }
-}
-buildShelves();
-
-/* ------------------------------
-   4D Tesseract wireframe (project 4D -> 3D each frame)
--------------------------------- */
-let tesseractEnabled = true;
-
-function tesseractVertices4D(){
-  const vs = [];
-  for (let x of [-1,1])
-  for (let y of [-1,1])
-  for (let z of [-1,1])
-  for (let w of [-1,1])
-    vs.push(new THREE.Vector4(x,y,z,w));
-  return vs;
-}
-const V4 = tesseractVertices4D();
-
-// edges: connect vertices that differ by exactly one coordinate
-const edges = [];
-for (let i=0; i<V4.length; i++){
-  for (let j=i+1; j<V4.length; j++){
-    let d = 0;
-    d += (V4[i].x !== V4[j].x) ? 1 : 0;
-    d += (V4[i].y !== V4[j].y) ? 1 : 0;
-    d += (V4[i].z !== V4[j].z) ? 1 : 0;
-    d += (V4[i].w !== V4[j].w) ? 1 : 0;
-    if (d === 1) edges.push([i,j]);
-  }
-}
-
-// LineSegments geometry
-const linePositions = new Float32Array(edges.length * 2 * 3);
-const lineGeo = new THREE.BufferGeometry();
-lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
-
-const lineMat = new THREE.LineBasicMaterial({ transparent:true, opacity:0.65 });
-const tesseractLines = new THREE.LineSegments(lineGeo, lineMat);
-tesseractLines.position.set(0, 0.1, -1.2);
-scene.add(tesseractLines);
-
-// 4D rotate helper
-function rot4(a, b, theta, v){
-  // rotate in plane (a,b) among x,y,z,w
-  const c = Math.cos(theta), s = Math.sin(theta);
-  const out = v.clone();
-  const va = v.getComponent(a);
-  const vb = v.getComponent(b);
-  out.setComponent(a, c*va - s*vb);
-  out.setComponent(b, s*va + c*vb);
-  return out;
-}
-
-function project4Dto3D(v4, wDist=3.2){
-  // perspective using W as extra dimension
-  const w = v4.w;
-  const k = wDist / (wDist - w); // if w approaches wDist -> infinite
-  return new THREE.Vector3(v4.x*k, v4.y*k, v4.z*k);
-}
-
-function updateTesseract(t, m){
-  // rotate in multiple 4D planes
-  const a = 0.65 + 1.65*m;
-  const b = 0.35 + 1.15*m;
-
-  const pts3 = V4.map(v=>{
-    let r = v.clone();
-    r = rot4(0,3, t*0.53*a, r); // x-w
-    r = rot4(1,3, t*0.41*b, r); // y-w
-    r = rot4(2,3, t*0.37*a, r); // z-w
-    r = rot4(0,1, t*0.27, r);   // x-y
-    r = rot4(1,2, t*0.19, r);   // y-z
-    return project4Dto3D(r, 3.0 + 0.8*Math.sin(t*0.6));
-  });
-
-  // write edges
-  let k = 0;
-  for (const [i,j] of edges){
-    const p = pts3[i], q = pts3[j];
-    linePositions[k++] = p.x; linePositions[k++] = p.y; linePositions[k++] = p.z;
-    linePositions[k++] = q.x; linePositions[k++] = q.y; linePositions[k++] = q.z;
-  }
-  lineGeo.attributes.position.needsUpdate = true;
-
-  // motion-reactive presence
-  tesseractLines.scale.setScalar(0.68 + 0.35*m);
-  lineMat.opacity = 0.25 + 0.55*(0.35 + m);
-}
-
-/* ------------------------------
-   “Dust” particles (floating motes)
--------------------------------- */
-let dustEnabled = true;
-const dustCount = 2600;
-const dustGeo = new THREE.BufferGeometry();
-const dustPos = new Float32Array(dustCount*3);
-const dustVel = new Float32Array(dustCount*3);
-
-for (let i=0; i<dustCount; i++){
-  dustPos[i*3+0] = (Math.random()*2-1) * 6;
-  dustPos[i*3+1] = (Math.random()*2-1) * 3.5;
-  dustPos[i*3+2] = -Math.random() * 10;
-  dustVel[i*3+0] = (Math.random()*2-1) * 0.003;
-  dustVel[i*3+1] = (Math.random()*2-1) * 0.003;
-  dustVel[i*3+2] = 0.012 + Math.random()*0.01;
-}
-dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
-const dustMat = new THREE.PointsMaterial({ size: 0.012, transparent:true, opacity:0.35 });
-const dust = new THREE.Points(dustGeo, dustMat);
-scene.add(dust);
-
-function updateDust(m){
-  for (let i=0; i<dustCount; i++){
-    let x = dustPos[i*3+0];
-    let y = dustPos[i*3+1];
-    let z = dustPos[i*3+2];
-
-    const vx = dustVel[i*3+0];
-    const vy = dustVel[i*3+1];
-    const vz = dustVel[i*3+2] * (0.6 + 1.8*m);
-
-    x += vx * (0.6 + 2.2*m);
-    y += vy * (0.6 + 2.2*m);
-    z += vz;
-
-    // gentle attraction to center (gives “gravitational” drift)
-    x += -x * (0.00006 + 0.00022*m);
-    y += -y * (0.00006 + 0.00022*m);
-
-    if (z > 1.8){
-      z = -10 - Math.random()*5;
-      x = (Math.random()*2-1) * 6;
-      y = (Math.random()*2-1) * 3.5;
-    }
-
-    dustPos[i*3+0] = x;
-    dustPos[i*3+1] = y;
-    dustPos[i*3+2] = z;
-  }
-  dustGeo.attributes.position.needsUpdate = true;
-  dustMat.opacity = 0.10 + 0.35*(0.35 + m);
-}
-
-/* ------------------------------
-   Main loop
--------------------------------- */
-let last = performance.now();
-
-function animate(now){
-  const dt = Math.min(0.033, (now - last) / 1000);
-  last = now;
-
-  // update camera-derived sources
-  updateMotion();
-  updateAtlas();
-  atlasTex.needsUpdate = true;
-
-  // update shader uniforms for all shelf materials
-  const t = now * 0.001;
-  shelvesGroup.traverse(obj=>{
-    if (obj.isMesh && obj.material && obj.material.uniforms){
-      obj.material.uniforms.uTime.value = t;
-      obj.material.uniforms.uMotion.value = motion;
-      obj.material.uniforms.uColorMode.value = colorMode;
-    }
-  });
-
-  // subtle “space breathing”
-  shelvesGroup.rotation.y = 0.06 * Math.sin(t*0.4);
-  shelvesGroup.rotation.x = 0.03 * Math.sin(t*0.33);
-  shelvesGroup.position.y = 0.03 * Math.sin(t*0.25);
-
-  if (tesseractEnabled) updateTesseract(t, motion);
-  tesseractLines.visible = tesseractEnabled;
-
-  if (dustEnabled) updateDust(motion);
-  dust.visible = dustEnabled;
-
-  shelvesGroup.visible = shelvesEnabled;
-
-  // background fog reacts slightly to motion
-  scene.fog.density = 0.035 + 0.03 * motion;
-
-  controls.update();
-  renderer.render(scene, camera);
-
-  requestAnimationFrame(animate);
-}
-requestAnimationFrame(animate);
-
-/* ------------------------------
-   Resize
--------------------------------- */
-addEventListener('resize', ()=>{
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-/* ------------------------------
-   Controls / Hotkeys
--------------------------------- */
-const hud = document.getElementById('hud');
-addEventListener('keydown', (e)=>{
-  const k = e.key.toLowerCase();
-  if (k === 'h'){
-    hud.style.display = (hud.style.display === 'none') ? 'block' : 'none';
-    toast(hud.style.display === 'none' ? "HUD hidden" : "HUD shown");
-  }
-  if (k === 'f'){
-    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
-    else document.exitFullscreen?.();
-    toast("Fullscreen toggle");
-  }
-  if (k === 'm'){
-    mirror = !mirror;
-    toast("Mirror: " + (mirror ? "ON" : "OFF"));
-  }
-  if (k === 'c'){
-    colorMode = (colorMode + 1) % 3;
-    toast("Color mode: " + colorMode);
-  }
-  if (k === '['){
-    slices = clamp(slices - 4, 12, 96);
-    ({ sliceH } = resizeAtlasFromVideo());
-    atlasTex.needsUpdate = true;
-    buildShelves();
-    toast("Slices: " + slices);
-  }
-  if (k === ']'){
-    slices = clamp(slices + 4, 12, 96);
-    ({ sliceH } = resizeAtlasFromVideo());
-    atlasTex.needsUpdate = true;
-    buildShelves();
-    toast("Slices: " + slices);
-  }
-  if (k === '1'){ shelvesEnabled = !shelvesEnabled; toast("Shelves: " + (shelvesEnabled?"ON":"OFF")); }
-  if (k === '2'){ tesseractEnabled = !tesseractEnabled; toast("Tesseract: " + (tesseractEnabled?"ON":"OFF")); }
-  if (k === '3'){ dustEnabled = !dustEnabled; toast("Dust: " + (dustEnabled?"ON":"OFF")); }
-});
-
-</script>
-</body>
-</html>
