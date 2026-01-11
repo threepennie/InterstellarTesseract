@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Tesseract Camera Installation — 4s Capture + Layer Shelves</title>
+  <title>Tesseract Camera Installation — 4s Capture + Layer Shelves (No importmap)</title>
   <style>
     html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#000; }
     #app { position:fixed; inset:0; }
@@ -17,10 +17,12 @@
       max-width: min(560px, calc(100vw - 24px));
       backdrop-filter: blur(8px);
       user-select:none;
+      z-index: 10;
     }
     #hud b { color:#fff; }
     #hud .row { opacity:.92; }
     #hud .dim { opacity:.65; }
+
     #toast {
       position:fixed; right:12px; bottom:12px;
       color:#fff; font: 12px ui-monospace, monospace;
@@ -31,23 +33,46 @@
       opacity:0; transform: translateY(6px);
       transition: opacity .25s ease, transform .25s ease;
       pointer-events:none;
+      z-index: 20;
     }
     #toast.show { opacity:1; transform: translateY(0); }
+
+    #startOverlay{
+      position:fixed; inset:0;
+      display:flex; align-items:center; justify-content:center;
+      background:rgba(0,0,0,.72);
+      z-index: 9999;
+    }
+    #startOverlay .panel{
+      max-width:min(720px, calc(100vw - 28px));
+      padding:18px 18px;
+      border-radius:18px;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(0,0,0,.45);
+      backdrop-filter: blur(10px);
+      color:#fff;
+      font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      text-align:left;
+    }
+    #startOverlay button{
+      margin-top:12px;
+      padding:14px 18px;
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,.2);
+      background:rgba(0,0,0,.45);
+      color:#fff;
+      cursor:pointer;
+      font: 13px ui-monospace, monospace;
+    }
+    #startOverlay .dim { opacity:.7; }
+
     canvas { display:block; }
   </style>
-
-  <!-- GitHub Pages / bare import 対策 -->
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-    }
-  }
-  </script>
 </head>
+
 <body>
   <div id="app"></div>
+
   <div id="hud">
     <div class="row"><b>Tesseract Camera Installation</b> — 4s capture → layer-decomposed shelves</div>
     <div class="row dim">棚（前面）：上=輪郭 / 中=低周波(ぼかし) / 下=高周波(テクスチャ)</div>
@@ -64,12 +89,32 @@
       <b>3</b> dust
     </div>
   </div>
+
   <div id="toast"></div>
 
-<script type="module">
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+  <!-- ユーザー操作でカメラ起動（Safari/一部環境対策） -->
+  <div id="startOverlay">
+    <div class="panel">
+      <div><b>START CAMERA</b></div>
+      <div class="dim">この作品はカメラ映像を4秒ごとにキャプチャし、レイヤー分解して棚に配架します。</div>
+      <div class="dim">※ブラウザやOSの仕様で、ユーザー操作なしのカメラ起動が無視されることがあるため、ボタン式にしています。</div>
+      <button id="startBtn">START CAMERA</button>
+      <div class="dim" style="margin-top:10px;">
+        カメラを許可しなくても、フォールバック（ノイズ素材）で動作は継続します。
+      </div>
+    </div>
+  </div>
 
+<script type="module">
+/* ---------------------------------------------------------
+   Imports (NO importmap): works on GitHub Pages + Firefox
+--------------------------------------------------------- */
+import * as THREE from 'https://esm.sh/three@0.160.0';
+import { OrbitControls } from 'https://esm.sh/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+/* ------------------------------
+   Utils
+-------------------------------- */
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const lerp  = (a, b, t) => a + (b - a) * t;
 
@@ -103,34 +148,43 @@ async function initCamera(){
     await video.play();
     camReady = true;
     toast("Camera connected");
+    // metadata arrived? if yes -> resize; else wait
+    if (video.readyState >= 1) onVideoReady();
+    else video.addEventListener('loadedmetadata', onVideoReady, { once:true });
   }catch(err){
     console.error(err);
     camReady = false;
     toast("Camera blocked — using fallback noise");
   }
 }
-await initCamera();
+
+/* User gesture start */
+const overlay = document.getElementById('startOverlay');
+document.getElementById('startBtn').addEventListener('click', async ()=>{
+  overlay.style.display = 'none';
+  await initCamera();
+});
 
 /* ------------------------------
-   Atlas: time-shelves, but each time-shelf contains 4 bands:
-   [0] edge, [1] low-pass, [2] high-pass, [3] diff-mask
-   We capture every 4 seconds (not every frame).
+   Atlas: time-shelves, each shelf has 4 bands:
+   [0] edge, [1] low-pass blur, [2] high-pass, [3] diff mask
+   Capture every 4 seconds, newest at top, old pushed down & discarded.
 -------------------------------- */
-let slices = 36;               // how many captures stored
-let captureInterval = 4.0;     // seconds
+let slices = 36;
+let captureInterval = 4.0;
 let lastCaptureT = -999;
 
 let atlasW = 640;
-let baseSliceH = 360;          // height of one band (one processed layer)
-let sliceH = baseSliceH * 4;   // one time-shelf contains 4 bands stacked
+let baseSliceH = 360;        // one band height
+let sliceH = baseSliceH * 4; // one shelf height = 4 bands
 let atlasH = sliceH * slices;
 
 const atlas = document.createElement('canvas');
 const actx = atlas.getContext('2d', { willReadFrequently: true });
 
-function resizeAtlasFromVideo(){
-  const vw = Math.max(2, video.videoWidth || 1280);
-  const vh = Math.max(2, video.videoHeight || 720);
+function resizeAtlasFromVideoOrFallback(){
+  const vw = (camReady && video.videoWidth) ? video.videoWidth : 1280;
+  const vh = (camReady && video.videoHeight) ? video.videoHeight : 720;
 
   atlasW = 640;
   baseSliceH = Math.round(atlasW * (vh / vw));
@@ -144,21 +198,12 @@ function resizeAtlasFromVideo(){
   actx.fillRect(0,0,atlasW,atlasH);
 }
 
-if (camReady) {
-  if (video.readyState >= 1) resizeAtlasFromVideo();
-  else video.addEventListener('loadedmetadata', () => resizeAtlasFromVideo(), { once:true });
-} else {
-  resizeAtlasFromVideo();
-}
-
-/* temp canvases for processing */
 const origC = document.createElement('canvas');
 const blurC = document.createElement('canvas');
 const edgeC = document.createElement('canvas');
 const highC = document.createElement('canvas');
 const diffC = document.createElement('canvas');
-const prevC = document.createElement('canvas'); // 前回キャプチャ（差分用）
-
+const prevC = document.createElement('canvas'); // previous capture for diff fallback
 
 function syncTempCanvases(){
   for (const c of [origC, blurC, edgeC, highC, diffC, prevC]){
@@ -166,9 +211,6 @@ function syncTempCanvases(){
     c.height = baseSliceH;
   }
 }
-syncTempCanvases();
-
-let prevCaptureLum = null; // Float32Array(atlasW*baseSliceH) luminance of previous capture
 
 function drawVideoTo(ctx){
   ctx.save();
@@ -196,6 +238,9 @@ function genFallbackNoise(ctx, t){
   ctx.putImageData(img, 0, 0);
 }
 
+/* CPU route helpers */
+let prevCaptureLum = null;
+
 function computeLuminanceArray(imgData){
   const d = imgData.data;
   const lum = new Float32Array(atlasW * baseSliceH);
@@ -206,7 +251,6 @@ function computeLuminanceArray(imgData){
   return lum;
 }
 
-// simple Sobel edge on luminance (every 4 secなので重くてもOK)
 function sobelEdgeFromLum(lum){
   const out = new Uint8ClampedArray(atlasW * baseSliceH * 4);
   const w = atlasW, h = baseSliceH;
@@ -214,7 +258,6 @@ function sobelEdgeFromLum(lum){
   for (let y=1; y<h-1; y++){
     for (let x=1; x<w-1; x++){
       const i = y*w + x;
-
       const tl = lum[(y-1)*w + (x-1)];
       const tc = lum[(y-1)*w + (x)];
       const tr = lum[(y-1)*w + (x+1)];
@@ -228,7 +271,6 @@ function sobelEdgeFromLum(lum){
       const gy = (-1*tl) + (-2*tc) + (-1*tr) + (1*bl) + (2*bc) + (1*br);
 
       let g = Math.sqrt(gx*gx + gy*gy);
-      // boost + clamp
       g = clamp(g * 0.9, 0, 255);
 
       const o = i*4;
@@ -241,8 +283,9 @@ function sobelEdgeFromLum(lum){
   return out;
 }
 
+/* Capture every 4s, layer split, with fallback if getImageData blocked */
 function captureAndInsert(t){
-  // shift old shelves down by one shelf (sliceH)
+  // shift old shelves down by one shelf
   actx.drawImage(atlas, 0, 0, atlasW, atlasH - sliceH, 0, sliceH, atlasW, atlasH - sliceH);
 
   const octx = origC.getContext('2d', { willReadFrequently:true });
@@ -256,26 +299,25 @@ function captureAndInsert(t){
   if (camReady && video.videoWidth > 0) drawVideoTo(octx);
   else genFallbackNoise(octx, t);
 
-  // blur (low-pass)
+  // low-pass blur
   bctx.save();
   bctx.clearRect(0,0,atlasW,baseSliceH);
   bctx.filter = 'blur(10px)';
   bctx.drawImage(origC, 0, 0);
   bctx.restore();
 
-  // --- Try CPU route (getImageData). If blocked, fallback to GPU compositing.
   try {
-    const origImg = octx.getImageData(0,0,atlasW,baseSliceH);   // <- ここが塞がれることがある
+    // CPU route (may be blocked by privacy/spoofer)
+    const origImg = octx.getImageData(0,0,atlasW,baseSliceH);
     const blurImg = bctx.getImageData(0,0,atlasW,baseSliceH);
 
-    // luminance
     const lum = computeLuminanceArray(origImg);
 
-    // edge (sobel)
+    // edge sobel
     const edgeRGBA = sobelEdgeFromLum(lum);
     ectx.putImageData(new ImageData(edgeRGBA, atlasW, baseSliceH), 0, 0);
 
-    // high-pass (orig - blur) *2 + 128
+    // high-pass
     const hi = hctx.createImageData(atlasW, baseSliceH);
     const od = origImg.data, bd = blurImg.data, hd = hi.data;
     for (let i=0; i<od.length; i+=4){
@@ -293,7 +335,7 @@ function captureAndInsert(t){
 
     for (let p=0, i=0; p<lum.length; p++, i+=4){
       const diff = Math.abs(lum[p] - prevCaptureLum[p]);
-      let v = (diff - 12.0) * 5.0;
+      let v = (diff - 12.0) * 5.0; // sensitivity
       v = clamp(v, 0, 255);
       dd[i] = v; dd[i+1] = v; dd[i+2] = v; dd[i+3] = 255;
       prevCaptureLum[p] = lum[p];
@@ -303,20 +345,20 @@ function captureAndInsert(t){
   } catch (err) {
     console.warn("Canvas read blocked; using composite fallback:", err);
 
-    // === Fallback: NO getImageData ===
-    // edge: difference between shifted copies (pseudo edge)
+    // Fallback: no getImageData (composite-only)
+    // edge (pseudo): difference of shifted copies
     ectx.save();
     ectx.clearRect(0,0,atlasW,baseSliceH);
     ectx.filter = 'contrast(250%)';
     ectx.globalCompositeOperation = 'source-over';
     ectx.drawImage(origC, 0, 0);
     ectx.globalCompositeOperation = 'difference';
-    ectx.drawImage(origC, 1, 0); // shift x
-    ectx.drawImage(origC, 0, 1); // shift y
+    ectx.drawImage(origC, 1, 0);
+    ectx.drawImage(origC, 0, 1);
     ectx.globalCompositeOperation = 'source-over';
     ectx.restore();
 
-    // high-pass: fill gray then difference(orig, blur)
+    // high-pass: gray then difference(orig, blur)
     hctx.save();
     hctx.clearRect(0,0,atlasW,baseSliceH);
     hctx.filter = 'contrast(180%) brightness(110%)';
@@ -341,7 +383,7 @@ function captureAndInsert(t){
     dctx.restore();
   }
 
-  // update prevC for next diff (works for both routes)
+  // store current as prevC for next fallback-diff
   pctx.clearRect(0,0,atlasW,baseSliceH);
   pctx.drawImage(origC, 0, 0);
 
@@ -351,27 +393,28 @@ function captureAndInsert(t){
   actx.drawImage(highC, 0, 0, atlasW, baseSliceH, 0, 2*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(diffC, 0, 0, atlasW, baseSliceH, 0, 3*baseSliceH, atlasW, baseSliceH);
 
+  // slight fade
   actx.fillStyle = "rgba(0,0,0,0.03)";
   actx.fillRect(0,0,atlasW,sliceH);
 
   toast("Captured ✓");
 }
 
-
 /* ------------------------------
-   Motion detection (for interactivity, still per frame)
+   Motion detection (still per frame)
 -------------------------------- */
 const mW = 96, mH = 54;
 const motionCanvas = document.createElement('canvas');
 motionCanvas.width = mW; motionCanvas.height = mH;
 const mctx = motionCanvas.getContext('2d', { willReadFrequently: true });
+
 let prevMotionFrame = null;
 let motion = 0;
 let motionRaw = 0;
 
 function updateMotion(){
   if (!(camReady && video.videoWidth > 0)) {
-    motionRaw = 0.15 * (Math.sin(performance.now()*0.001) * 0.5 + 0.5);
+    motionRaw = 0.12 * (Math.sin(performance.now()*0.001) * 0.5 + 0.5);
     motion = lerp(motion, motionRaw, 0.05);
     return;
   }
@@ -382,3 +425,534 @@ function updateMotion(){
     mctx.scale(-1,1);
   }
   mctx.drawImage(video, 0, 0, mW, mH);
+  mctx.restore();
+
+  const data = mctx.getImageData(0,0,mW,mH).data;
+  if (!prevMotionFrame) {
+    prevMotionFrame = new Uint8ClampedArray(data);
+    motionRaw = 0;
+    return;
+  }
+  let sum = 0;
+  for (let i=0; i<data.length; i+=4){
+    const r = data[i], g = data[i+1], b = data[i+2];
+    const pr = prevMotionFrame[i], pg = prevMotionFrame[i+1], pb = prevMotionFrame[i+2];
+    const lum = (0.2126*r + 0.7152*g + 0.0722*b);
+    const plum = (0.2126*pr + 0.7152*pg + 0.0722*pb);
+    sum += Math.abs(lum - plum);
+    prevMotionFrame[i] = r; prevMotionFrame[i+1] = g; prevMotionFrame[i+2] = b; prevMotionFrame[i+3] = 255;
+  }
+  motionRaw = clamp(sum / (mW*mH) / 55, 0, 1);
+  motion = lerp(motion, motionRaw, 0.08);
+}
+
+/* ------------------------------
+   Three.js scene
+-------------------------------- */
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance" });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x000000, 1);
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000000, 0.045);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 200);
+camera.position.set(0, 0.9, 3.2);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+const dir = new THREE.DirectionalLight(0xffffff, 0.55);
+dir.position.set(2, 3, 1);
+scene.add(dir);
+
+/* Init atlas with fallback sizes immediately so it never renders black */
+resizeAtlasFromVideoOrFallback();
+syncTempCanvases();
+
+/* atlas texture */
+const atlasTex = new THREE.CanvasTexture(atlas);
+atlasTex.minFilter = THREE.LinearFilter;
+atlasTex.magFilter = THREE.LinearFilter;
+atlasTex.wrapS = THREE.ClampToEdgeWrapping;
+atlasTex.wrapT = THREE.ClampToEdgeWrapping;
+
+/* ------------------------------
+   Shelf shader (front: 3-band layout, back: diff-only)
+-------------------------------- */
+let colorMode = 0;
+
+const baseUniforms = {
+  uAtlas: { value: atlasTex },
+  uAtlasSize: { value: new THREE.Vector2(atlasW, atlasH) },
+  uSliceH: { value: sliceH },
+  uSlices: { value: slices },
+  uTime: { value: 0 },
+  uSliceIndex: { value: 0 },
+  uMotion: { value: 0 },
+  uColorMode: { value: colorMode },
+  uGain: { value: 1.15 },
+  uLayerMode: { value: 0 } // 0=front, 1=diff-only
+};
+
+const shelvesMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  uniforms: baseUniforms,
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    varying float vDepth;
+    void main(){
+      vUv = uv;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      vDepth = -mv.z;
+      gl_Position = projectionMatrix * mv;
+    }
+  `,
+  fragmentShader: /* glsl */`
+    precision highp float;
+    varying vec2 vUv;
+    varying float vDepth;
+
+    uniform sampler2D uAtlas;
+    uniform vec2 uAtlasSize;
+    uniform float uSliceH;
+    uniform float uSlices;
+    uniform float uTime;
+    uniform float uSliceIndex;
+    uniform float uMotion;
+    uniform int uColorMode;
+    uniform float uGain;
+    uniform int uLayerMode;
+
+    float hash21(vec2 p){
+      p = fract(p*vec2(123.34, 345.45));
+      p += dot(p, p+34.345);
+      return fract(p.x*p.y);
+    }
+    vec3 tonemap(vec3 c){
+      c = max(c, 0.0);
+      c = c / (1.0 + c);
+      return pow(c, vec3(0.95));
+    }
+
+    void main(){
+      float slice = uSliceIndex;
+      float sliceV0 = slice * (uSliceH / uAtlasSize.y);
+      float shelfH  = (uSliceH / uAtlasSize.y);
+      float bandH   = shelfH * 0.25;
+
+      float m = uMotion;
+      float t = uTime;
+
+      vec2 uv = vUv;
+      vec2 p  = uv - 0.5;
+      float r = length(p);
+
+      float depthFactor = clamp((slice / max(uSlices-1.0, 1.0)), 0.0, 1.0);
+      float lens = (0.10 + 0.32*m) * (0.35 + depthFactor);
+      p *= (1.0 + lens * r*r);
+
+      float swirl = (0.18 + 0.62*m) * (0.25 + depthFactor);
+      float ang = swirl * sin(t*0.7 + depthFactor*6.283 + p.x*2.0 - p.y*2.0);
+      float cs = cos(ang), sn = sin(ang);
+      p = mat2(cs, -sn, sn, cs) * p;
+
+      float ca = (0.002 + 0.01*m) * (0.35 + r);
+      vec2 uvR = p + 0.5 + ca * normalize(p + 1e-5);
+      vec2 uvG = p + 0.5;
+      vec2 uvB = p + 0.5 - ca * normalize(p + 1e-5);
+
+      float bandIndex = 0.0;
+      float localY = 0.0;
+
+      if (uLayerMode == 1) {
+        bandIndex = 3.0; // diff
+        localY = clamp(uvG.y, 0.0, 1.0);
+      } else {
+        // top=edge, mid=low, bottom=high
+        if (uvG.y > 0.666) { bandIndex = 0.0; localY = (uvG.y - 0.666) / 0.334; }
+        else if (uvG.y > 0.333) { bandIndex = 1.0; localY = (uvG.y - 0.333) / 0.333; }
+        else { bandIndex = 2.0; localY = (uvG.y) / 0.333; }
+        localY = clamp(localY, 0.0, 1.0);
+      }
+
+      float bandV0 = sliceV0 + bandIndex * bandH;
+      float bandV1 = bandV0 + bandH;
+
+      float yR = mix(bandV0, bandV1, clamp(uvR.y, 0.0, 1.0));
+      float yG = mix(bandV0, bandV1, localY);
+      float yB = mix(bandV0, bandV1, clamp(uvB.y, 0.0, 1.0));
+
+      vec2 stR = vec2(clamp(uvR.x, 0.0, 1.0), yR);
+      vec2 stG = vec2(clamp(uvG.x, 0.0, 1.0), yG);
+      vec2 stB = vec2(clamp(uvB.x, 0.0, 1.0), yB);
+
+      vec3 col;
+      col.r = texture2D(uAtlas, stR).r;
+      col.g = texture2D(uAtlas, stG).g;
+      col.b = texture2D(uAtlas, stB).b;
+
+      if (uColorMode == 1) {
+        float lum = dot(col, vec3(0.2126,0.7152,0.0722));
+        col = vec3(lum, lum*lum, pow(lum, 0.5));
+      } else if (uColorMode == 2) {
+        col = 1.0 - col.bgr;
+      }
+
+      if (uLayerMode == 1) {
+        float lum = dot(col, vec3(0.2126,0.7152,0.0722));
+        col = vec3(lum);
+        col *= (0.8 + 1.6*m);
+      }
+
+      float g = hash21(gl_FragCoord.xy + t*60.0) - 0.5;
+      col += g * (0.02 + 0.06*m);
+
+      float vig = smoothstep(0.95, 0.25, r);
+      col *= (0.65 + 0.55*vig);
+
+      float fog = smoothstep(1.0, 10.0, vDepth);
+      col *= (1.0 - 0.75*fog);
+
+      col *= uGain;
+
+      float a = mix(0.45, 0.07, depthFactor);
+      a *= (0.65 + 0.55*vig);
+      a *= (0.65 + 0.9*m);
+      if (uLayerMode == 1) a *= 0.85;
+
+      col = tonemap(col);
+      gl_FragColor = vec4(col, a);
+    }
+  `
+});
+
+/* ------------------------------
+   Shelves build: each time-slice = front plane + back diff plane
+-------------------------------- */
+const shelvesGroup = new THREE.Group();
+scene.add(shelvesGroup);
+
+let shelvesEnabled = true;
+
+function buildShelves(){
+  while (shelvesGroup.children.length) shelvesGroup.remove(shelvesGroup.children[0]);
+
+  baseUniforms.uAtlasSize.value.set(atlasW, atlasH);
+  baseUniforms.uSliceH.value = sliceH;
+  baseUniforms.uSlices.value = slices;
+
+  const aspect = atlasW / baseSliceH;
+  const w = 1.5 * aspect;
+  const h = 1.5;
+  const geo = new THREE.PlaneGeometry(w, h, 1, 1);
+
+  const count = slices;
+  for (let i=0; i<count; i++){
+    // front
+    const mFront = shelvesMat.clone();
+    mFront.uniforms = THREE.UniformsUtils.clone(baseUniforms);
+    mFront.uniforms.uSliceIndex.value = i;
+    mFront.uniforms.uLayerMode.value = 0;
+
+    const front = new THREE.Mesh(geo, mFront);
+
+    const k = i / Math.max(count-1,1);
+    const z = -lerp(0.2, 8.8, k);
+    const bend = (k - 0.5);
+    const x = 0.55 * Math.sin(bend * 2.2);
+    const y = 0.12 * Math.sin(bend * 3.0);
+
+    front.position.set(x, y, z);
+    front.rotation.y = 0.25 * Math.sin(bend * 2.0);
+    front.rotation.x = 0.10 * Math.sin(bend * 1.7);
+
+    const s = lerp(1.04, 0.78, k);
+    front.scale.setScalar(s);
+
+    shelvesGroup.add(front);
+
+    // back diff
+    const mDiff = shelvesMat.clone();
+    mDiff.uniforms = THREE.UniformsUtils.clone(baseUniforms);
+    mDiff.uniforms.uSliceIndex.value = i;
+    mDiff.uniforms.uLayerMode.value = 1;
+    mDiff.uniforms.uGain.value = 1.35;
+
+    const back = new THREE.Mesh(geo, mDiff);
+    back.position.copy(front.position);
+    back.rotation.copy(front.rotation);
+    back.scale.copy(front.scale);
+
+    back.position.z -= 0.18;
+    back.scale.multiplyScalar(1.02);
+
+    shelvesGroup.add(back);
+  }
+}
+
+/* ------------------------------
+   4D Tesseract wireframe
+-------------------------------- */
+let tesseractEnabled = true;
+
+function tesseractVertices4D(){
+  const vs = [];
+  for (let x of [-1,1])
+  for (let y of [-1,1])
+  for (let z of [-1,1])
+  for (let w of [-1,1])
+    vs.push(new THREE.Vector4(x,y,z,w));
+  return vs;
+}
+const V4 = tesseractVertices4D();
+const edges = [];
+for (let i=0; i<V4.length; i++){
+  for (let j=i+1; j<V4.length; j++){
+    let d = 0;
+    d += (V4[i].x !== V4[j].x) ? 1 : 0;
+    d += (V4[i].y !== V4[j].y) ? 1 : 0;
+    d += (V4[i].z !== V4[j].z) ? 1 : 0;
+    d += (V4[i].w !== V4[j].w) ? 1 : 0;
+    if (d === 1) edges.push([i,j]);
+  }
+}
+
+const linePositions = new Float32Array(edges.length * 2 * 3);
+const lineGeo = new THREE.BufferGeometry();
+lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
+const lineMat = new THREE.LineBasicMaterial({ transparent:true, opacity:0.65 });
+const tesseractLines = new THREE.LineSegments(lineGeo, lineMat);
+tesseractLines.position.set(0, 0.1, -1.2);
+scene.add(tesseractLines);
+
+function rot4(a, b, theta, v){
+  const c = Math.cos(theta), s = Math.sin(theta);
+  const out = v.clone();
+  const va = v.getComponent(a);
+  const vb = v.getComponent(b);
+  out.setComponent(a, c*va - s*vb);
+  out.setComponent(b, s*va + c*vb);
+  return out;
+}
+function project4Dto3D(v4, wDist=3.2){
+  const w = v4.w;
+  const k = wDist / (wDist - w);
+  return new THREE.Vector3(v4.x*k, v4.y*k, v4.z*k);
+}
+function updateTesseract(t, m){
+  const a = 0.65 + 1.65*m;
+  const b = 0.35 + 1.15*m;
+
+  const pts3 = V4.map(v=>{
+    let r = v.clone();
+    r = rot4(0,3, t*0.53*a, r);
+    r = rot4(1,3, t*0.41*b, r);
+    r = rot4(2,3, t*0.37*a, r);
+    r = rot4(0,1, t*0.27, r);
+    r = rot4(1,2, t*0.19, r);
+    return project4Dto3D(r, 3.0 + 0.8*Math.sin(t*0.6));
+  });
+
+  let k = 0;
+  for (const [i,j] of edges){
+    const p = pts3[i], q = pts3[j];
+    linePositions[k++] = p.x; linePositions[k++] = p.y; linePositions[k++] = p.z;
+    linePositions[k++] = q.x; linePositions[k++] = q.y; linePositions[k++] = q.z;
+  }
+  lineGeo.attributes.position.needsUpdate = true;
+
+  tesseractLines.scale.setScalar(0.68 + 0.35*m);
+  lineMat.opacity = 0.25 + 0.55*(0.35 + m);
+}
+
+/* ------------------------------
+   Dust
+-------------------------------- */
+let dustEnabled = true;
+const dustCount = 2600;
+const dustGeo = new THREE.BufferGeometry();
+const dustPos = new Float32Array(dustCount*3);
+const dustVel = new Float32Array(dustCount*3);
+
+for (let i=0; i<dustCount; i++){
+  dustPos[i*3+0] = (Math.random()*2-1) * 6;
+  dustPos[i*3+1] = (Math.random()*2-1) * 3.5;
+  dustPos[i*3+2] = -Math.random() * 10;
+  dustVel[i*3+0] = (Math.random()*2-1) * 0.003;
+  dustVel[i*3+1] = (Math.random()*2-1) * 0.003;
+  dustVel[i*3+2] = 0.012 + Math.random()*0.01;
+}
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+const dustMat = new THREE.PointsMaterial({ size: 0.012, transparent:true, opacity:0.35 });
+const dust = new THREE.Points(dustGeo, dustMat);
+scene.add(dust);
+
+function updateDust(m){
+  for (let i=0; i<dustCount; i++){
+    let x = dustPos[i*3+0];
+    let y = dustPos[i*3+1];
+    let z = dustPos[i*3+2];
+
+    const vx = dustVel[i*3+0];
+    const vy = dustVel[i*3+1];
+    const vz = dustVel[i*3+2] * (0.6 + 1.8*m);
+
+    x += vx * (0.6 + 2.2*m);
+    y += vy * (0.6 + 2.2*m);
+    z += vz;
+
+    x += -x * (0.00006 + 0.00022*m);
+    y += -y * (0.00006 + 0.00022*m);
+
+    if (z > 1.8){
+      z = -10 - Math.random()*5;
+      x = (Math.random()*2-1) * 6;
+      y = (Math.random()*2-1) * 3.5;
+    }
+
+    dustPos[i*3+0] = x;
+    dustPos[i*3+1] = y;
+    dustPos[i*3+2] = z;
+  }
+  dustGeo.attributes.position.needsUpdate = true;
+  dustMat.opacity = 0.10 + 0.35*(0.35 + m);
+}
+
+/* ------------------------------
+   On video metadata ready: resize everything and rebuild shelves
+-------------------------------- */
+function onVideoReady(){
+  // re-fit atlas sizes to camera aspect
+  resizeAtlasFromVideoOrFallback();
+  syncTempCanvases();
+  prevCaptureLum = null;
+  // update uniforms sizes after rebuild
+  buildShelves();
+  atlasTex.needsUpdate = true;
+  toast("Video metadata ready ✓");
+}
+
+/* Build shelves now (fallback sizes) */
+buildShelves();
+
+/* ------------------------------
+   Main loop
+-------------------------------- */
+let last = performance.now();
+
+function ensureFirstCapture(t){
+  if (lastCaptureT < -100) {
+    captureAndInsert(t);
+    lastCaptureT = t;
+    atlasTex.needsUpdate = true;
+  }
+}
+
+function animate(now){
+  const t = now * 0.001;
+  last = now;
+
+  updateMotion();
+
+  ensureFirstCapture(t);
+
+  if (t - lastCaptureT >= captureInterval){
+    // if camera just became available and aspect changed, we already handle onVideoReady
+    captureAndInsert(t);
+    lastCaptureT = t;
+    atlasTex.needsUpdate = true;
+  }
+
+  shelvesGroup.traverse(obj=>{
+    if (obj.isMesh && obj.material && obj.material.uniforms){
+      obj.material.uniforms.uTime.value = t;
+      obj.material.uniforms.uMotion.value = motion;
+      obj.material.uniforms.uColorMode.value = colorMode;
+    }
+  });
+
+  shelvesGroup.rotation.y = 0.06 * Math.sin(t*0.4);
+  shelvesGroup.rotation.x = 0.03 * Math.sin(t*0.33);
+  shelvesGroup.position.y = 0.03 * Math.sin(t*0.25);
+
+  if (tesseractEnabled) updateTesseract(t, motion);
+  tesseractLines.visible = tesseractEnabled;
+
+  if (dustEnabled) updateDust(motion);
+  dust.visible = dustEnabled;
+
+  shelvesGroup.visible = shelvesEnabled;
+
+  scene.fog.density = 0.035 + 0.03 * motion;
+
+  controls.update();
+  renderer.render(scene, camera);
+
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+/* ------------------------------
+   Resize
+-------------------------------- */
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* ------------------------------
+   Hotkeys
+-------------------------------- */
+const hud = document.getElementById('hud');
+addEventListener('keydown', (e)=>{
+  const k = e.key.toLowerCase();
+  if (k === 'h'){
+    hud.style.display = (hud.style.display === 'none') ? 'block' : 'none';
+    toast(hud.style.display === 'none' ? "HUD hidden" : "HUD shown");
+  }
+  if (k === 'f'){
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+    else document.exitFullscreen?.();
+    toast("Fullscreen toggle");
+  }
+  if (k === 'm'){
+    mirror = !mirror;
+    toast("Mirror: " + (mirror ? "ON" : "OFF"));
+  }
+  if (k === 'c'){
+    colorMode = (colorMode + 1) % 3;
+    toast("Color mode: " + colorMode);
+  }
+  if (k === '['){
+    slices = clamp(slices - 4, 12, 96);
+    resizeAtlasFromVideoOrFallback();
+    syncTempCanvases();
+    prevCaptureLum = null;
+    buildShelves();
+    atlasTex.needsUpdate = true;
+    toast("Slices: " + slices);
+  }
+  if (k === ']'){
+    slices = clamp(slices + 4, 12, 96);
+    resizeAtlasFromVideoOrFallback();
+    syncTempCanvases();
+    prevCaptureLum = null;
+    buildShelves();
+    atlasTex.needsUpdate = true;
+    toast("Slices: " + slices);
+  }
+  if (k === '1'){ shelvesEnabled = !shelvesEnabled; toast("Shelves: " + (shelvesEnabled?"ON":"OFF")); }
+  if (k === '2'){ tesseractEnabled = !tesseractEnabled; toast("Tesseract: " + (tesseractEnabled?"ON":"OFF")); }
+  if (k === '3'){ dustEnabled = !dustEnabled; toast("Dust: " + (dustEnabled?"ON":"OFF")); }
+});
+</script>
+</body>
+</html>
