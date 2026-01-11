@@ -3,817 +3,524 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Tesseract Installation — Flickr Shelves (Fixed Atlas)</title>
+  <title>Interstellar Flickr Grid</title>
   <style>
-    html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#000; }
-    #app { position:fixed; inset:0; }
+    :root{
+      --bg: #000;
+      --fg: rgba(255,255,255,.85);
+      --dim: rgba(255,255,255,.55);
+
+      --cols: 14;
+      --rows: 8;
+
+      --gap: 10px;
+
+      /* 3D stage */
+      --persp: 900px;
+      --tiltX: 62deg;   /* Interstellar-ish shelf angle */
+      --tiltY: -18deg;
+      --spinZ: 18deg;
+
+      /* cell */
+      --cell-radius: 14px;
+      --cell-border: rgba(255,255,255,.14);
+
+      /* animation */
+      --pulse: 0.0;
+    }
+
+    html, body {
+      margin:0; height:100%;
+      background: var(--bg);
+      overflow:hidden;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      color: var(--fg);
+    }
+
+    /* subtle film grain */
+    body::before{
+      content:"";
+      position:fixed; inset:0;
+      pointer-events:none;
+      background-image:
+        repeating-linear-gradient(0deg, rgba(255,255,255,.03) 0 1px, rgba(0,0,0,0) 1px 3px),
+        repeating-linear-gradient(90deg, rgba(255,255,255,.02) 0 1px, rgba(0,0,0,0) 1px 4px);
+      mix-blend-mode: overlay;
+      opacity: .22;
+    }
+
     #hud{
-      position:fixed; left:12px; top:12px; z-index:10;
-      color:#eaeaea;
-      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      position:fixed; left:14px; top:14px; z-index:20;
       background: rgba(0,0,0,.45);
       border: 1px solid rgba(255,255,255,.12);
-      border-radius: 12px;
+      border-radius: 14px;
       padding: 10px 12px;
       user-select:none;
+      min-width: 320px;
+      backdrop-filter: blur(6px);
     }
-    #hud b { color:#fff; }
-    #hud .row { opacity:.92; }
-    #hud .dim { opacity:.65; }
+    #hud .title{ font-weight:700; }
+    #hud .row{ margin-top:6px; font-size:12px; line-height:1.4; color: var(--dim); }
     #hud input{
-      width: 260px; padding: 6px 8px;
-      border-radius: 10px;
-      border: 1px solid rgba(255,255,255,.18);
-      background: rgba(0,0,0,.35); color:#fff; outline:none;
-      margin-left: 8px;
-    }
-    #hud button, #hud label{
-      margin-left: 8px; padding: 6px 10px;
-      border-radius: 10px;
+      width: 250px;
+      padding: 7px 9px;
+      border-radius: 12px;
       border: 1px solid rgba(255,255,255,.18);
       background: rgba(255,255,255,.06);
-      color:#fff;
+      color: var(--fg);
+      outline:none;
+      margin-left: 8px;
+      font: inherit;
+    }
+    #hud button{
+      margin-left: 8px;
+      padding: 7px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(255,255,255,.08);
+      color: var(--fg);
       cursor:pointer;
       font: inherit;
     }
-    #hud label { padding: 5px 10px; display:inline-flex; gap:6px; align-items:center; }
-    #hud button:hover{ background: rgba(255,255,255,.10); }
-    #hud input[type="checkbox"]{ width:auto; margin:0; }
+    #hud button:hover{ background: rgba(255,255,255,.12); }
+    #hud .k { color: rgba(255,255,255,.85); font-weight:700; }
+
+    #stage{
+      position:fixed; inset:0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      perspective: var(--persp);
+      transform-style: preserve-3d;
+    }
+
+    /* The "lattice" plane */
+    #lattice{
+      position:relative;
+      width: min(1400px, 94vw);
+      height: min(820px, 84vh);
+      transform-style: preserve-3d;
+      will-change: transform;
+      transform:
+        rotateX(var(--tiltX))
+        rotateY(var(--tiltY))
+        rotateZ(var(--spinZ));
+      filter: drop-shadow(0 30px 60px rgba(0,0,0,.55));
+    }
+
+    /* Grid lines overlay */
+    #lattice::before{
+      content:"";
+      position:absolute; inset:-4px;
+      pointer-events:none;
+      background:
+        repeating-linear-gradient(
+          0deg,
+          rgba(255,255,255,.08) 0px,
+          rgba(255,255,255,.08) 1px,
+          rgba(0,0,0,0) 1px,
+          rgba(0,0,0,0) calc((100% / var(--rows)) - 0px)
+        ),
+        repeating-linear-gradient(
+          90deg,
+          rgba(255,255,255,.07) 0px,
+          rgba(255,255,255,.07) 1px,
+          rgba(0,0,0,0) 1px,
+          rgba(0,0,0,0) calc((100% / var(--cols)) - 0px)
+        );
+      opacity: .35;
+      mix-blend-mode: screen;
+      border-radius: 22px;
+      mask-image: radial-gradient(circle at 50% 50%, black 40%, transparent 78%);
+    }
+
+    /* Actual grid container */
+    #grid{
+      position:absolute; inset:0;
+      display:grid;
+      grid-template-columns: repeat(var(--cols), 1fr);
+      grid-template-rows: repeat(var(--rows), 1fr);
+      gap: var(--gap);
+      padding: 14px;
+      transform-style: preserve-3d;
+    }
+
+    .cell{
+      position:relative;
+      border-radius: var(--cell-radius);
+      border: 1px solid var(--cell-border);
+      overflow:hidden;
+      background: rgba(255,255,255,.03);
+      transform-style: preserve-3d;
+      will-change: transform, opacity;
+      box-shadow:
+        inset 0 0 0 1px rgba(255,255,255,.05),
+        0 10px 26px rgba(0,0,0,.35);
+    }
+
+    /* Depth: each cell slightly lifted and wobbled */
+    .cell{
+      transform: translateZ(var(--z, 0px)) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+      opacity: var(--op, .88);
+    }
+
+    .cell::after{
+      /* glass highlight */
+      content:"";
+      position:absolute; inset:0;
+      background: radial-gradient(circle at 20% 20%, rgba(255,255,255,.22), rgba(255,255,255,0) 55%);
+      opacity: .32;
+      mix-blend-mode: screen;
+      pointer-events:none;
+    }
+
+    img{
+      width:100%; height:100%;
+      object-fit: cover;
+      display:block;
+      transform: scale(1.02);
+      filter: contrast(1.05) saturate(1.08);
+      opacity: var(--imgop, 1);
+      transition: opacity 900ms ease;
+    }
+
+    .fadeIn img{ opacity: 1; }
+    .fadeOut img{ opacity: .08; }
+
+    /* bottom vignette */
+    #vignette{
+      position:fixed; inset:0;
+      pointer-events:none;
+      background: radial-gradient(circle at 50% 45%, rgba(0,0,0,0) 0 45%, rgba(0,0,0,.6) 75%, rgba(0,0,0,.92) 100%);
+      opacity: .85;
+      z-index: 10;
+    }
+
     #toast{
-      position:fixed; left:50%; bottom:14px; transform:translateX(-50%);
+      position:fixed;
+      left:50%; bottom:14px; transform:translateX(-50%);
       padding: 10px 14px;
       background: rgba(0,0,0,.6);
       border: 1px solid rgba(255,255,255,.14);
-      border-radius: 12px;
-      color:#fff;
-      font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      opacity:0; pointer-events:none;
+      border-radius: 14px;
+      color: var(--fg);
+      font-size: 12px;
+      z-index: 30;
+      opacity:0;
       transition: opacity .18s ease;
-      z-index: 20;
+      pointer-events:none;
       max-width: 86vw;
       white-space: nowrap;
-      overflow: hidden;
+      overflow:hidden;
       text-overflow: ellipsis;
     }
     #toast.show{ opacity:1; }
-    #atlasPreview{
-      position:fixed; right:12px; top:12px;
-      width: 260px; height:auto;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,.16);
-      background: rgba(0,0,0,.55);
-      display:none;
-      z-index: 11;
-      image-rendering: pixelated;
-    }
   </style>
 </head>
 <body>
-  <div id="app"></div>
 
   <div id="hud">
-    <div class="row"><b>Tesseract Installation</b> — Flickr → 4s interval → layer shelves (fixed atlas)</div>
-    <div class="row dim">上=輪郭 / 中=低周波(ぼかし) / 下=高周波(テクスチャ) / 背面=差分</div>
-
-    <div class="row" style="margin-top:8px;">
-      Flickr tags:
+    <div class="title">Interstellar Flickr Grid</div>
+    <div class="row">
+      Tags:
       <input id="tags" value="space,nebula,night" />
       <button id="apply">Apply</button>
       <button id="pause">Pause</button>
-      <label title="画像がCORSで落ちる/直取得が無理な時はON">
-        <input id="proxy" type="checkbox" checked />
-        Proxy
-      </label>
     </div>
-
-    <div class="row dim" style="margin-top:6px;">
+    <div class="row">
       Status: <span id="status">init…</span>
+      <span style="margin-left:10px;">Loaded: <span id="loaded">0</span></span>
+      <span style="margin-left:10px;">Pool: <span id="pool">0</span></span>
     </div>
-    <div class="row dim">
-      GPU maxTexture: <span id="maxTex">?</span> /
-      atlasH(fixed): <span id="atlasH">?</span> /
-      slices(req): <span id="reqSlices">?</span> /
-      slices(used): <span id="usedSlices">?</span>
-    </div>
-
-    <div class="row dim" style="margin-top:6px;">
-      Mouse: drag rotate / Wheel: zoom　
-      Keys: <b>H</b> HUD <b>F</b> Fullscreen <b>M</b> Mirror <b>C</b> Color <b>[</b>/<b>]</b> slices <b>1</b> shelves <b>2</b> tesseract <b>3</b> dust <b>B</b> blend <b>A</b> atlas
+    <div class="row">
+      Keys: <span class="k">H</span> HUD / <span class="k">R</span> Reload feed / <span class="k">Space</span> Pause
     </div>
   </div>
 
-  <img id="atlasPreview" alt="atlas preview" />
+  <div id="stage">
+    <div id="lattice">
+      <div id="grid"></div>
+    </div>
+  </div>
+
+  <div id="vignette"></div>
   <div id="toast"></div>
 
-<script type="module">
-import * as THREE from 'https://esm.sh/three@0.160.0';
-import { OrbitControls } from 'https://esm.sh/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+<script>
+(() => {
+  const $ = (sel) => document.querySelector(sel);
+  const grid = $("#grid");
+  const hud = $("#hud");
+  const statusEl = $("#status");
+  const loadedEl = $("#loaded");
+  const poolEl = $("#pool");
+  const tagsInput = $("#tags");
+  const applyBtn = $("#apply");
+  const pauseBtn = $("#pause");
+  const toastEl = $("#toast");
 
-const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
-const lerp  = (a, b, t) => a + (b - a) * t;
+  const COLS = 14;
+  const ROWS = 8;
+  const CELLS = COLS * ROWS;
 
-const toastEl = document.getElementById('toast');
-const statusEl = document.getElementById('status');
-const maxTexEl = document.getElementById('maxTex');
-const atlasHEl = document.getElementById('atlasH');
-const reqSlicesEl = document.getElementById('reqSlices');
-const usedSlicesEl = document.getElementById('usedSlices');
+  let paused = false;
+  let currentTags = tagsInput.value.trim() || "space,nebula,night";
 
-function setStatus(s){ statusEl.textContent = s; }
-let toastTimer = 0;
-function toast(msg){
-  toastEl.textContent = msg;
-  toastEl.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=>toastEl.classList.remove('show'), 1200);
-}
+  // Pool of image URLs
+  let urlPool = [];
+  let loadedCount = 0;
 
-const app = document.getElementById('app');
+  // Timing
+  const INTERVAL_MS = 4000;
+  let lastTick = performance.now();
 
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x000000, 0.06);
-
-const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.05, 120);
-camera.position.set(0, 0.4, 5.4);
-
-const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false, powerPreference:'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
-renderer.setClearColor(0x000000, 1.0);
-app.appendChild(renderer.domElement);
-
-const gl = renderer.getContext();
-const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 0;
-maxTexEl.textContent = String(maxTex);
-
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-
-addEventListener('resize', ()=>{
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-// ===========================================================
-// 1) Fixed atlas params (keep stable, avoid GPU max mismatch)
-// ===========================================================
-const ATLAS_W = 2048;
-const ATLAS_H = 8192; // fixed for stability
-atlasHEl.textContent = String(ATLAS_H);
-
-// 4 layers baked vertically per shelf snapshot
-const LAYERS = 4;
-const baseSliceH = 288; // per layer base height
-const sliceH = baseSliceH * LAYERS;
-
-// user desired shelves count (clamped to atlas capacity)
-let requestedSlices = 36;
-let maxSlices = Math.max(4, Math.floor(ATLAS_H / sliceH));
-let slices = Math.min(requestedSlices, maxSlices);
-reqSlicesEl.textContent = String(requestedSlices);
-usedSlicesEl.textContent = String(slices);
-
-if (requestedSlices > maxSlices){
-  toast(`GPU atlasH fixed. Slices clamped to ${maxSlices}.`);
-}
-
-// ===========================================================
-// 2) UI controls
-// ===========================================================
-const tagsInput = document.getElementById('tags');
-const applyBtn  = document.getElementById('apply');
-const pauseBtn  = document.getElementById('pause');
-const proxyChk  = document.getElementById('proxy');
-const hud = document.getElementById('hud');
-
-applyBtn.onclick = ()=> {
-  currentTags = tagsInput.value.trim() || 'space,nebula,night';
-  toast("Tags applied: " + currentTags);
-  setStatus("tags applied");
-};
-let paused = false;
-pauseBtn.onclick = ()=> {
-  paused = !paused;
-  pauseBtn.textContent = paused ? 'Resume' : 'Pause';
-  toast(paused ? "Paused" : "Resumed");
-};
-
-let mirror = false;
-let colorMode = 0; // 0..2
-let atlasPreviewOn = false;
-const atlasPreview = document.getElementById('atlasPreview');
-
-addEventListener('keydown', (e)=>{
-  const k = e.key.toLowerCase();
-  if (k === 'h'){
-    hud.style.display = (hud.style.display === 'none') ? 'block' : 'none';
-    toast(hud.style.display === 'none' ? "HUD hidden" : "HUD shown");
+  function setStatus(s){ statusEl.textContent = s; }
+  function toast(msg){
+    toastEl.textContent = msg;
+    toastEl.classList.add("show");
+    setTimeout(() => toastEl.classList.remove("show"), 1200);
   }
-  if (k === 'f'){
-    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
-    else document.exitFullscreen?.();
-    toast("Fullscreen toggle");
-  }
-  if (k === 'm'){
-    mirror = !mirror;
-    toast("Mirror: " + (mirror ? "ON" : "OFF"));
-  }
-  if (k === 'b'){
-    additiveBlend = !additiveBlend;
-    applyShelfBlending();
-    toast("Shelf blend: " + (additiveBlend ? "Additive" : "Normal"));
-  }
-  if (k === 'c'){
-    colorMode = (colorMode + 1) % 3;
-    toast("Color mode: " + colorMode);
+  function updateCounters(){
+    loadedEl.textContent = String(loadedCount);
+    poolEl.textContent = String(urlPool.length);
   }
 
-  if (k === 'a'){
-    atlasPreviewOn = !atlasPreviewOn;
-    atlasPreview.style.display = atlasPreviewOn ? 'block' : 'none';
-    updateAtlasPreview();
-    toast("Atlas preview: " + (atlasPreviewOn ? "ON" : "OFF"));
+  // --- Create cells
+  const cells = [];
+  for (let i=0; i<CELLS; i++){
+    const cell = document.createElement("div");
+    cell.className = "cell";
+
+    // Depth styling (Interstellar-ish)
+    const x = i % COLS;
+    const y = Math.floor(i / COLS);
+
+    // Depth gradient: center forward, edges back
+    const nx = (x/(COLS-1))*2 - 1;
+    const ny = (y/(ROWS-1))*2 - 1;
+    const r = Math.sqrt(nx*nx + ny*ny);
+
+    const z = (1 - r) * 60 + (Math.random()*14 - 7);     // px
+    const rx = (Math.random()*2 - 1) * 2.5;              // deg
+    const ry = (Math.random()*2 - 1) * 2.5;
+
+    cell.style.setProperty("--z", `${z.toFixed(1)}px`);
+    cell.style.setProperty("--rx", `${rx.toFixed(2)}deg`);
+    cell.style.setProperty("--ry", `${ry.toFixed(2)}deg`);
+    cell.style.setProperty("--op", `${(0.68 + (1-r)*0.28).toFixed(2)}`);
+
+    const img = document.createElement("img");
+    img.alt = "flickr";
+    img.decoding = "async";
+    img.loading = "lazy";
+    img.style.opacity = "0";
+    cell.appendChild(img);
+
+    grid.appendChild(cell);
+    cells.push(cell);
   }
 
-  if (k === '['){
-    requestedSlices = clamp(requestedSlices - 4, 8, 96);
-    maxSlices = Math.max(4, Math.floor(ATLAS_H / sliceH));
-    slices = Math.min(requestedSlices, maxSlices);
-    baseUniforms.uSlices.value = slices;
-    reqSlicesEl.textContent = String(requestedSlices);
-    usedSlicesEl.textContent = String(slices);
-    rebuildShelves();
-    toast(`Slices requested:${requestedSlices} used:${slices}`);
-  }
-  if (k === ']'){
-    requestedSlices = clamp(requestedSlices + 4, 8, 96);
-    maxSlices = Math.max(4, Math.floor(ATLAS_H / sliceH));
-    slices = Math.min(requestedSlices, maxSlices);
-    baseUniforms.uSlices.value = slices;
-    reqSlicesEl.textContent = String(requestedSlices);
-    usedSlicesEl.textContent = String(slices);
-    rebuildShelves();
-    toast(`Slices requested:${requestedSlices} used:${slices}`);
-  }
+  // --- Flickr Public Feed (JSONP, no API key)
+  // We request: https://www.flickr.com/services/feeds/photos_public.gne?format=json&tags=...&tagmode=all&lang=en-us&jsoncallback=CALLBACK
+  function flickrFeed(tags){
+    return new Promise((resolve, reject) => {
+      const cb = "__flickr_cb_" + Date.now() + "_" + Math.random().toString(16).slice(2);
+      const script = document.createElement("script");
 
-  if (k === '1'){ shelvesEnabled = !shelvesEnabled; toast("Shelves: " + (shelvesEnabled?"ON":"OFF")); }
-  if (k === '2'){ tesseractEnabled = !tesseractEnabled; toast("Tesseract: " + (tesseractEnabled?"ON":"OFF")); }
-  if (k === '3'){ dustEnabled = !dustEnabled; toast("Dust: " + (dustEnabled?"ON":"OFF")); }
-});
+      let timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error("Flickr feed timeout"));
+      }, 9000);
 
-// ===========================================================
-// 3) Atlas texture + CPU painter
-// ===========================================================
-const atlasCanvas = document.createElement('canvas');
-atlasCanvas.width = ATLAS_W;
-atlasCanvas.height = ATLAS_H;
-const atlasCtx = atlasCanvas.getContext('2d', { willReadFrequently:false });
+      function cleanup(){
+        clearTimeout(timeout);
+        delete window[cb];
+        script.remove();
+      }
 
-atlasCtx.fillStyle = 'black';
-atlasCtx.fillRect(0,0,ATLAS_W,ATLAS_H);
+      window[cb] = (data) => {
+        cleanup();
+        try{
+          const items = (data && data.items) ? data.items : [];
+          // items[i].media.m is typically _m.jpg (small). Try to swap to a bigger size when possible.
+          const urls = items.map(it => {
+            const u = it?.media?.m;
+            if (!u) return null;
+            // Try larger: _m -> _b or _c (not always valid, but often works)
+            // We'll try _b first; if that fails onload, browser will show broken image in that cell only (rare).
+            return u.replace("_m.", "_b.");
+          }).filter(Boolean);
 
-const atlasTex = new THREE.CanvasTexture(atlasCanvas);
-atlasTex.minFilter = THREE.LinearFilter;
-atlasTex.magFilter = THREE.LinearFilter;
-atlasTex.wrapS = atlasTex.wrapT = THREE.ClampToEdgeWrapping;
-
-function updateAtlasPreview(){
-  if (!atlasPreviewOn) return;
-  atlasPreview.src = atlasCanvas.toDataURL('image/png');
-}
-
-// ===========================================================
-// 4) Helpers: image processing
-// ===========================================================
-function makeCanvas(w,h){
-  const c = document.createElement('canvas');
-  c.width=w; c.height=h;
-  return c;
-}
-
-// edge map (simple sobel-ish)
-function edgeDetect(srcCtx, w, h){
-  const out = makeCanvas(w,h);
-  const octx = out.getContext('2d');
-  const img = srcCtx.getImageData(0,0,w,h);
-  const d = img.data;
-  const g = new Float32Array(w*h);
-  for(let i=0;i<w*h;i++){
-    const r=d[i*4], gg=d[i*4+1], b=d[i*4+2];
-    g[i] = 0.2126*r + 0.7152*gg + 0.0722*b;
-  }
-  const outImg = octx.createImageData(w,h);
-  const od = outImg.data;
-  const kx = [-1,0,1,-2,0,2,-1,0,1];
-  const ky = [-1,-2,-1,0,0,0,1,2,1];
-  for(let y=1;y<h-1;y++){
-    for(let x=1;x<w-1;x++){
-      let sx=0, sy=0;
-      let idx=0;
-      for(let j=-1;j<=1;j++){
-        for(let i=-1;i<=1;i++){
-          const v = g[(y+j)*w + (x+i)];
-          sx += v * kx[idx];
-          sy += v * ky[idx];
-          idx++;
+          resolve(urls);
+        } catch (e){
+          reject(e);
         }
+      };
+
+      const src =
+        "https://www.flickr.com/services/feeds/photos_public.gne" +
+        "?format=json" +
+        "&lang=en-us" +
+        "&tagmode=all" +
+        "&tags=" + encodeURIComponent(tags) +
+        "&jsoncallback=" + encodeURIComponent(cb) +
+        "&_=" + Date.now(); // cache bust
+
+      script.src = src;
+      script.onerror = () => {
+        cleanup();
+        reject(new Error("Flickr feed script error"));
+      };
+
+      document.head.appendChild(script);
+    });
+  }
+
+  async function refillPool(){
+    setStatus("fetching flickr feed…");
+    try{
+      const urls = await flickrFeed(currentTags);
+      // Shuffle for variety
+      for (let i = urls.length - 1; i > 0; i--){
+        const j = (Math.random() * (i+1)) | 0;
+        [urls[i], urls[j]] = [urls[j], urls[i]];
       }
-      const mag = Math.min(255, Math.sqrt(sx*sx+sy*sy));
-      const o = (y*w+x)*4;
-      od[o]=od[o+1]=od[o+2]=mag;
-      od[o+3]=255;
+      // Merge (keep size bounded)
+      urlPool = urls.concat(urlPool).slice(0, 400);
+      setStatus(`ok (${urls.length} items)`);
+      updateCounters();
+      toast(`Feed loaded: ${urls.length} photos`);
+    } catch (e){
+      setStatus("feed failed (retrying soon)");
+      toast("Feed failed. Check network.");
+      // Keep running; we'll retry later
     }
   }
-  octx.putImageData(outImg,0,0);
-  return out;
-}
 
-// simple blur
-function blurCanvas(src, radius){
-  const w=src.width, h=src.height;
-  const tmp = makeCanvas(w,h);
-  const tctx = tmp.getContext('2d');
-  const o = makeCanvas(w,h);
-  const octx = o.getContext('2d');
-  tctx.filter = `blur(${radius}px)`;
-  tctx.drawImage(src,0,0);
-  octx.drawImage(tmp,0,0);
-  return o;
-}
+  // --- Assign an image to a random cell with gentle transition
+  function injectOne(){
+    if (urlPool.length === 0) return;
+    const url = urlPool.pop();
+    const idx = (Math.random() * cells.length) | 0;
+    const cell = cells[idx];
+    const img = cell.querySelector("img");
 
-// high-pass: src - blur
-function highPass(src, blurPx){
-  const w=src.width, h=src.height;
-  const b = blurCanvas(src, blurPx);
-  const out = makeCanvas(w,h);
-  const octx = out.getContext('2d');
-  const sctx = src.getContext('2d');
-  const bctx = b.getContext('2d');
-  const si = sctx.getImageData(0,0,w,h);
-  const bi = bctx.getImageData(0,0,w,h);
-  const od = octx.createImageData(w,h);
-  for(let i=0;i<w*h;i++){
-    const o=i*4;
-    for(let c=0;c<3;c++){
-      const v = si.data[o+c] - bi.data[o+c] + 128;
-      od.data[o+c] = clamp(v,0,255);
+    // fade out old
+    cell.classList.remove("fadeIn");
+    cell.classList.add("fadeOut");
+
+    // swap after short delay to allow fade
+    setTimeout(() => {
+      img.style.opacity = "0";
+      img.onload = () => {
+        loadedCount++;
+        updateCounters();
+        cell.classList.remove("fadeOut");
+        cell.classList.add("fadeIn");
+        img.style.opacity = "1";
+      };
+      img.onerror = () => {
+        // If larger size fails, fall back to original _m
+        const fallback = url.replace("_b.", "_m.");
+        if (img.src !== fallback){
+          img.src = fallback;
+          return;
+        }
+        // If still fails, drop silently
+      };
+      img.src = url;
+    }, 220);
+  }
+
+  // --- Initial fill
+  async function init(){
+    document.documentElement.style.setProperty("--cols", COLS);
+    document.documentElement.style.setProperty("--rows", ROWS);
+
+    await refillPool();
+
+    // Seed a bunch quickly
+    for (let i=0; i<Math.min(40, CELLS); i++){
+      injectOne();
     }
-    od.data[o+3]=255;
+
+    setStatus("running");
+    updateCounters();
   }
-  octx.putImageData(od,0,0);
-  return out;
-}
 
-// diff = abs(curr - prev)
-function diffCanvas(a, b){
-  const w=a.width, h=a.height;
-  const out = makeCanvas(w,h);
-  const octx = out.getContext('2d');
-  const actx = a.getContext('2d');
-  const bctx = b.getContext('2d');
-  const ai = actx.getImageData(0,0,w,h);
-  const bi = bctx.getImageData(0,0,w,h);
-  const od = octx.createImageData(w,h);
-  for(let i=0;i<w*h;i++){
-    const o=i*4;
-    for(let c=0;c<3;c++){
-      od.data[o+c] = Math.abs(ai.data[o+c] - bi.data[o+c]);
-    }
-    od.data[o+3]=255;
-  }
-  octx.putImageData(od,0,0);
-  return out;
-}
+  // --- 3D camera-ish mouse parallax
+  let mx = 0, my = 0;
+  let tx = 0, ty = 0;
+  const lattice = $("#lattice");
 
-// fallback noise
-function genFallbackNoise(w,h, seed=0){
-  const c = makeCanvas(w,h);
-  const ctx = c.getContext('2d');
-  const img = ctx.createImageData(w,h);
-  let s = (seed*1664525 + 1013904223)>>>0;
-  for(let i=0;i<w*h;i++){
-    s = (s*1664525 + 1013904223)>>>0;
-    const v = (s>>>24);
-    const o=i*4;
-    img.data[o] = v;
-    img.data[o+1] = (v*0.6)|0;
-    img.data[o+2] = (255-v);
-    img.data[o+3] = 255;
-  }
-  ctx.putImageData(img,0,0);
-  return c;
-}
-
-// ===========================================================
-// 5) Flickr fetch (proxy option)
-// ===========================================================
-let currentTags = tagsInput.value.trim() || 'space,nebula,night';
-
-// NOTE: Replace this with your own Flickr API key if needed.
-// The code keeps running with fallback noise if fetching fails.
-const FLICKR_API_KEY = ""; // optional
-const FLICKR_ENDPOINT = "https://www.flickr.com/services/rest/";
-
-async function fetchFlickrPhotoUrl(tags){
-  // If no key, force fallback
-  if (!FLICKR_API_KEY){
-    return null;
-  }
-  const params = new URLSearchParams({
-    method: "flickr.photos.search",
-    api_key: FLICKR_API_KEY,
-    tags,
-    tag_mode: "all",
-    per_page: "50",
-    page: String(1 + Math.floor(Math.random()*6)),
-    content_type: "1",
-    media: "photos",
-    safe_search: "1",
-    sort: "relevance",
-    format: "json",
-    nojsoncallback: "1"
+  window.addEventListener("pointermove", (e) => {
+    mx = (e.clientX / innerWidth) * 2 - 1;
+    my = (e.clientY / innerHeight) * 2 - 1;
   });
-  const url = `${FLICKR_ENDPOINT}?${params.toString()}`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error("Flickr API failed");
-  const j = await r.json();
-  const photos = j?.photos?.photo || [];
-  if (!photos.length) return null;
-  const p = photos[Math.floor(Math.random()*photos.length)];
-  // Construct a source URL (use "z" size)
-  // https://live.staticflickr.com/{server-id}/{id}_{secret}_{size-suffix}.jpg
-  return `https://live.staticflickr.com/${p.server}/${p.id}_${p.secret}_z.jpg`;
-}
 
-function viaProxy(u){
-  // Use images.weserv.nl as a simple open proxy for CORS. (Not guaranteed forever)
-  const enc = encodeURIComponent(u);
-  return `https://images.weserv.nl/?url=${enc.replace(/^https%3A%2F%2F/, "")}&default=black&output=jpg`;
-}
+  function animate(){
+    requestAnimationFrame(animate);
 
-async function loadImage(url){
-  return new Promise((resolve, reject)=>{
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = ()=>resolve(img);
-    img.onerror = (e)=>reject(e);
-    img.src = url;
-  });
-}
+    // smoothing
+    tx += (mx - tx) * 0.06;
+    ty += (my - ty) * 0.06;
 
-// ===========================================================
-// 6) Build shelf slices into atlas
-// ===========================================================
-const sliceW = ATLAS_W;
-const layerH = baseSliceH;
+    // parallax transform (subtle, cinematic)
+    const rx = 62 + ty * 3.5;
+    const ry = -18 + tx * 6.0;
+    const rz = 18 + tx * 1.5;
 
-let shelfHead = 0; // rolling insert idx
-let prevBase = genFallbackNoise(sliceW, layerH, 1);
-let currBase = genFallbackNoise(sliceW, layerH, 2);
+    lattice.style.transform =
+      `rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg) translateZ(0px)`;
 
-function bakeIntoAtlas(sliceIndex, canv_edge, canv_low, canv_high, canv_diff){
-  const y0 = sliceIndex * sliceH;
-  atlasCtx.save();
-  atlasCtx.globalCompositeOperation = 'source-over';
-  atlasCtx.drawImage(canv_edge, 0, y0 + 0*layerH, sliceW, layerH);
-  atlasCtx.drawImage(canv_low,  0, y0 + 1*layerH, sliceW, layerH);
-  atlasCtx.drawImage(canv_high, 0, y0 + 2*layerH, sliceW, layerH);
-  atlasCtx.drawImage(canv_diff, 0, y0 + 3*layerH, sliceW, layerH);
-  atlasCtx.restore();
-}
+    // tick inject
+    const now = performance.now();
+    if (!paused && now - lastTick > INTERVAL_MS){
+      lastTick = now;
 
-function buildLayersFromBase(baseCanvas){
-  const w = baseCanvas.width, h = baseCanvas.height;
-  const base = makeCanvas(w,h);
-  base.getContext('2d').drawImage(baseCanvas,0,0,w,h);
+      // If pool is running low, refill in background
+      if (urlPool.length < 24) refillPool();
 
-  const edge = edgeDetect(base.getContext('2d'), w, h);
-  const low  = blurCanvas(base, 8);
-  const high = highPass(base, 10);
-  const diff = diffCanvas(base, prevBase);
-
-  return { edge, low, high, diff };
-}
-
-function pushNewCapture(baseCanvas){
-  const sliceIndex = shelfHead % slices;
-  currBase = baseCanvas;
-  const L = buildLayersFromBase(currBase);
-
-  bakeIntoAtlas(sliceIndex, L.edge, L.low, L.high, L.diff);
-
-  prevBase = currBase;
-  shelfHead++;
-
-  atlasTex.needsUpdate = true;
-  updateAtlasPreview();
-}
-
-// ===========================================================
-// 7) Shelves shader + geometry
-// ===========================================================
-const baseUniforms = {
-  uAtlas: { value: atlasTex },
-  uTime: { value: 0 },
-  uSlices: { value: slices },
-  uSliceH: { value: sliceH },
-  uAtlasH: { value: ATLAS_H },
-  uColorMode: { value: 0 },
-  uMirror: { value: 0 },
-  uLayerMode: { value: 0 }
-};
-
-const shelvesMat = new THREE.ShaderMaterial({
-  transparent: true,
-  depthWrite: false,
-  uniforms: baseUniforms,
-  vertexShader: `
-    varying vec2 vUv;
-    varying float vDepth;
-    void main(){
-      vUv = uv;
-      vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      vDepth = -mv.z;
-      gl_Position = projectionMatrix * mv;
+      // Inject a few per tick for living lattice
+      injectOne();
+      if (Math.random() < 0.55) injectOne();
     }
-  `,
-  fragmentShader: `
-    precision highp float;
-
-    uniform sampler2D uAtlas;
-    uniform float uTime;
-    uniform float uSlices;
-    uniform float uSliceH;
-    uniform float uAtlasH;
-    uniform float uColorMode;
-    uniform float uMirror;
-
-    varying vec2 vUv;
-    varying float vDepth;
-
-    vec3 tonemap(vec3 c){
-      c = c / (c + vec3(1.0));
-      return pow(c, vec3(1.0/2.2));
-    }
-
-    void main(){
-      // shelf index along "time" (z-depth illusion via vUv.y)
-      float sliceF = floor(vUv.y * uSlices);
-      float sliceT = fract(vUv.y * uSlices);
-
-      // each shelf uses 4 stacked layers within sliceH:
-      // 0 edge, 1 low, 2 high, 3 diff
-      float layerF = floor(sliceT * 4.0);
-      float layerT = fract(sliceT * 4.0);
-
-      // map to atlas UV
-      float y = (sliceF * uSliceH + layerF * (uSliceH/4.0) + layerT * (uSliceH/4.0)) / uAtlasH;
-      vec2 uv = vec2(vUv.x, y);
-
-      if (uMirror > 0.5) uv.x = 1.0 - uv.x;
-
-      vec3 col = texture2D(uAtlas, uv).rgb / 255.0;
-
-      // subtle motion (drift)
-      float drift = sin(uTime*0.33 + sliceF*0.47) * 0.004;
-      vec2 uv2 = uv + vec2(drift, 0.0);
-      vec3 col2 = texture2D(uAtlas, uv2).rgb / 255.0;
-      col = mix(col, col2, 0.35);
-
-      // layer weighting (make edges glow etc.)
-      float w = 1.0;
-      if (layerF < 0.5) w = 1.6;          // edge
-      else if (layerF < 1.5) w = 1.05;    // low
-      else if (layerF < 2.5) w = 1.2;     // high
-      else w = 1.8;                       // diff
-
-      // distance fade
-      float fade = exp(-vDepth * 0.22);
-
-      // vignette (FIXED): smoothstep args must be in ascending order.
-      vec2 p = vUv*2.0-1.0;
-      float r = length(p);
-      float vig = 1.0 - smoothstep(0.25, 0.95, r);
-      vig = clamp(vig, 0.0, 1.0);
-
-      // color modes
-      if (uColorMode > 1.5){
-        // monochrome + bloom bias
-        float g = dot(col, vec3(0.2126,0.7152,0.0722));
-        col = vec3(g);
-      } else if (uColorMode > 0.5){
-        // spectral shift
-        col = col.bgr;
-      }
-
-      col *= w * fade * (0.35 + 0.65*vig);
-
-      // alpha shaped by layer and depth
-      float a = 0.38 * fade * (0.25 + 0.75*vig);
-      if (layerF < 0.5) a *= 0.85;
-      else if (layerF > 2.5) a *= 0.9;
-
-      col = tonemap(col * 2.2);
-
-      gl_FragColor = vec4(col, a);
-    }
-  `
-});
-
-let additiveBlend = true;
-function applyShelfBlending(){
-  shelvesMat.blending = additiveBlend ? THREE.AdditiveBlending : THREE.NormalBlending;
-  shelvesMat.needsUpdate = true;
-}
-applyShelfBlending();
-shelvesMat.side = THREE.DoubleSide;
-
-// shelves geometry (a stack of thin planes)
-let shelvesGroup = new THREE.Group();
-scene.add(shelvesGroup);
-
-function rebuildShelves(){
-  scene.remove(shelvesGroup);
-  shelvesGroup.traverse(obj=>{
-    if (obj.geometry) obj.geometry.dispose();
-  });
-  shelvesGroup = new THREE.Group();
-  scene.add(shelvesGroup);
-
-  const count = slices;
-  const radius = 1.15;
-  const height = 2.3;
-  for(let i=0;i<count;i++){
-    const g = new THREE.PlaneGeometry(3.2, height, 1, 1);
-    const m = shelvesMat;
-    const mesh = new THREE.Mesh(g, m);
-    // distribute along z and rotate slightly to feel like "shelves"
-    const t = i/(count-1);
-    const z = lerp(-2.2, 2.2, t);
-    const ang = lerp(-0.38, 0.38, t);
-    mesh.position.set(Math.sin(ang)*radius, 0, z);
-    mesh.rotation.y = ang;
-    // use UV.y to encode slice index via geometry mapping:
-    // we map plane's vUv.y by translating UVs per mesh index
-    const uv = g.attributes.uv;
-    for(let k=0;k<uv.count;k++){
-      const uy = uv.getY(k);
-      const newY = (i + uy) / count;
-      uv.setY(k, newY);
-    }
-    uv.needsUpdate = true;
-    shelvesGroup.add(mesh);
-  }
-}
-rebuildShelves();
-
-// ===========================================================
-// 8) Tesseract: subtle center object
-// ===========================================================
-const tesseractGroup = new THREE.Group();
-scene.add(tesseractGroup);
-
-function makeLineBox(size){
-  const geo = new THREE.BoxGeometry(size,size,size);
-  const edges = new THREE.EdgesGeometry(geo);
-  const mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent:true, opacity:0.38 });
-  const line = new THREE.LineSegments(edges, mat);
-  return line;
-}
-const box1 = makeLineBox(1.05);
-const box2 = makeLineBox(0.68);
-box2.position.set(0.15,0.08,0.10);
-tesseractGroup.add(box1, box2);
-
-const bridgeMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent:true, opacity:0.20 });
-const bridgeGeo = new THREE.BufferGeometry();
-const bridgePts = [];
-function pushBridge(a,b){
-  bridgePts.push(a.x,a.y,a.z, b.x,b.y,b.z);
-}
-const corners1 = [
-  new THREE.Vector3(-0.525,-0.525,-0.525),
-  new THREE.Vector3( 0.525,-0.525,-0.525),
-  new THREE.Vector3( 0.525, 0.525,-0.525),
-  new THREE.Vector3(-0.525, 0.525,-0.525),
-  new THREE.Vector3(-0.525,-0.525, 0.525),
-  new THREE.Vector3( 0.525,-0.525, 0.525),
-  new THREE.Vector3( 0.525, 0.525, 0.525),
-  new THREE.Vector3(-0.525, 0.525, 0.525),
-];
-const corners2 = corners1.map(v=>v.clone().multiplyScalar(0.68/1.05).add(new THREE.Vector3(0.15,0.08,0.10)));
-for(let i=0;i<8;i++) pushBridge(corners1[i], corners2[i]);
-bridgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(bridgePts, 3));
-const bridge = new THREE.LineSegments(bridgeGeo, bridgeMat);
-tesseractGroup.add(bridge);
-
-tesseractGroup.position.set(0,0,0);
-tesseractGroup.rotation.set(0.08,0.0,0.0);
-
-// ===========================================================
-// 9) Dust / particles
-// ===========================================================
-const dustGeo = new THREE.BufferGeometry();
-const N = 1200;
-const pos = new Float32Array(N*3);
-for(let i=0;i<N;i++){
-  pos[i*3+0] = (Math.random()-0.5)*12;
-  pos[i*3+1] = (Math.random()-0.5)*8;
-  pos[i*3+2] = (Math.random()-0.5)*12;
-}
-dustGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-const dustMat = new THREE.PointsMaterial({ color:0xffffff, size:0.012, transparent:true, opacity:0.25, depthWrite:false });
-const dust = new THREE.Points(dustGeo, dustMat);
-scene.add(dust);
-
-// ===========================================================
-// 10) Capture loop: every 4 seconds, pull Flickr (or fallback) and push into shelf
-// ===========================================================
-let lastCaptureAt = performance.now();
-const CAPTURE_INTERVAL_MS = 4000;
-
-async function captureOnce(){
-  setStatus("capturing…");
-  try{
-    let url = await fetchFlickrPhotoUrl(currentTags);
-    if (!url) throw new Error("No Flickr key or no photos");
-    if (proxyChk.checked) url = viaProxy(url);
-    const img = await loadImage(url);
-
-    // draw into base canvas with cover crop
-    const base = makeCanvas(sliceW, layerH);
-    const ctx = base.getContext('2d');
-    ctx.fillStyle='black';
-    ctx.fillRect(0,0,sliceW,layerH);
-
-    // cover crop
-    const iw = img.naturalWidth || img.width;
-    const ih = img.naturalHeight || img.height;
-    const s = Math.max(sliceW/iw, layerH/ih);
-    const dw = iw*s, dh = ih*s;
-    const dx = (sliceW - dw)/2;
-    const dy = (layerH - dh)/2;
-    ctx.drawImage(img, dx, dy, dw, dh);
-
-    pushNewCapture(base);
-    setStatus("ok (flickr)");
-  }catch(err){
-    // fallback
-    const seed = (Math.random()*1e9)|0;
-    const base = genFallbackNoise(sliceW, layerH, seed);
-    pushNewCapture(base);
-    setStatus("fallback noise (flickr failed)");
-  }
-}
-
-// warm start: 2 frames
-pushNewCapture(genFallbackNoise(sliceW, layerH, 101));
-pushNewCapture(genFallbackNoise(sliceW, layerH, 202));
-setStatus("running");
-
-// ===========================================================
-// 11) Main animation loop
-// ===========================================================
-let shelvesEnabled = true;
-let tesseractEnabled = true;
-let dustEnabled = true;
-
-let t0 = performance.now();
-function animate(){
-  requestAnimationFrame(animate);
-  const t = (performance.now() - t0) * 0.001;
-
-  controls.update();
-
-  // uniforms
-  baseUniforms.uTime.value = t;
-  baseUniforms.uColorMode.value = colorMode;
-  baseUniforms.uMirror.value = mirror ? 1.0 : 0.0;
-
-  // animate shelves subtle drift
-  shelvesGroup.visible = shelvesEnabled;
-  tesseractGroup.visible = tesseractEnabled;
-  dust.visible = dustEnabled;
-
-  tesseractGroup.rotation.y = t*0.22;
-  tesseractGroup.rotation.x = 0.10 + Math.sin(t*0.4)*0.08;
-
-  dust.rotation.y = t*0.02;
-  dust.position.y = Math.sin(t*0.3)*0.08;
-
-  // periodic capture
-  if (!paused && performance.now() - lastCaptureAt > CAPTURE_INTERVAL_MS){
-    lastCaptureAt = performance.now();
-    captureOnce();
   }
 
-  renderer.render(scene, camera);
-}
-animate();
-toast("Ready — press A for atlas preview");
+  // --- Controls
+  applyBtn.onclick = async () => {
+    currentTags = tagsInput.value.trim() || "space,nebula,night";
+    toast("Tags applied: " + currentTags);
+    urlPool = [];
+    await refillPool();
+  };
 
+  function togglePause(){
+    paused = !paused;
+    pauseBtn.textContent = paused ? "Resume" : "Pause";
+    toast(paused ? "Paused" : "Resumed");
+  }
+
+  pauseBtn.onclick = togglePause;
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key.toLowerCase() === "h"){
+      hud.style.display = (hud.style.display === "none") ? "block" : "none";
+      toast(hud.style.display === "none" ? "HUD hidden" : "HUD shown");
+    }
+    if (e.key.toLowerCase() === "r"){
+      refillPool();
+      toast("Reloading feed…");
+    }
+    if (e.code === "Space"){
+      e.preventDefault();
+      togglePause();
+    }
+  }, { passive:false });
+
+  // Start
+  init().then(animate);
+})();
 </script>
 </body>
 </html>
