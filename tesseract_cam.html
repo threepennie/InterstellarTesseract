@@ -157,9 +157,11 @@ const blurC = document.createElement('canvas');
 const edgeC = document.createElement('canvas');
 const highC = document.createElement('canvas');
 const diffC = document.createElement('canvas');
+const prevC = document.createElement('canvas'); // 前回キャプチャ（差分用）
+
 
 function syncTempCanvases(){
-  for (const c of [origC, blurC, edgeC, highC, diffC]){
+  for (const c of [origC, blurC, edgeC, highC, diffC, prevC]){
     c.width = atlasW;
     c.height = baseSliceH;
   }
@@ -243,83 +245,118 @@ function captureAndInsert(t){
   // shift old shelves down by one shelf (sliceH)
   actx.drawImage(atlas, 0, 0, atlasW, atlasH - sliceH, 0, sliceH, atlasW, atlasH - sliceH);
 
-  // produce orig
   const octx = origC.getContext('2d', { willReadFrequently:true });
   const bctx = blurC.getContext('2d', { willReadFrequently:true });
   const ectx = edgeC.getContext('2d', { willReadFrequently:true });
   const hctx = highC.getContext('2d', { willReadFrequently:true });
   const dctx = diffC.getContext('2d', { willReadFrequently:true });
+  const pctx = prevC.getContext('2d', { willReadFrequently:true });
 
-  if (camReady && video.videoWidth > 0) {
-    drawVideoTo(octx);
+  // orig
+  if (camReady && video.videoWidth > 0) drawVideoTo(octx);
+  else genFallbackNoise(octx, t);
 
-    // low-pass blur
-    bctx.save();
-    bctx.clearRect(0,0,atlasW,baseSliceH);
-    bctx.filter = 'blur(10px)';
-    // blur input: draw original canvas to preserve mirror already applied
-    bctx.drawImage(origC, 0, 0);
-    bctx.restore();
-  } else {
-    genFallbackNoise(octx, t);
-    bctx.drawImage(origC, 0, 0);
+  // blur (low-pass)
+  bctx.save();
+  bctx.clearRect(0,0,atlasW,baseSliceH);
+  bctx.filter = 'blur(10px)';
+  bctx.drawImage(origC, 0, 0);
+  bctx.restore();
+
+  // --- Try CPU route (getImageData). If blocked, fallback to GPU compositing.
+  try {
+    const origImg = octx.getImageData(0,0,atlasW,baseSliceH);   // <- ここが塞がれることがある
+    const blurImg = bctx.getImageData(0,0,atlasW,baseSliceH);
+
+    // luminance
+    const lum = computeLuminanceArray(origImg);
+
+    // edge (sobel)
+    const edgeRGBA = sobelEdgeFromLum(lum);
+    ectx.putImageData(new ImageData(edgeRGBA, atlasW, baseSliceH), 0, 0);
+
+    // high-pass (orig - blur) *2 + 128
+    const hi = hctx.createImageData(atlasW, baseSliceH);
+    const od = origImg.data, bd = blurImg.data, hd = hi.data;
+    for (let i=0; i<od.length; i+=4){
+      hd[i]   = clamp((od[i]   - bd[i])   * 2 + 128, 0, 255);
+      hd[i+1] = clamp((od[i+1] - bd[i+1]) * 2 + 128, 0, 255);
+      hd[i+2] = clamp((od[i+2] - bd[i+2]) * 2 + 128, 0, 255);
+      hd[i+3] = 255;
+    }
+    hctx.putImageData(hi, 0, 0);
+
+    // diff mask vs previous capture luminance
+    const di = dctx.createImageData(atlasW, baseSliceH);
+    const dd = di.data;
+    if (!prevCaptureLum) prevCaptureLum = new Float32Array(lum.length);
+
+    for (let p=0, i=0; p<lum.length; p++, i+=4){
+      const diff = Math.abs(lum[p] - prevCaptureLum[p]);
+      let v = (diff - 12.0) * 5.0;
+      v = clamp(v, 0, 255);
+      dd[i] = v; dd[i+1] = v; dd[i+2] = v; dd[i+3] = 255;
+      prevCaptureLum[p] = lum[p];
+    }
+    dctx.putImageData(di, 0, 0);
+
+  } catch (err) {
+    console.warn("Canvas read blocked; using composite fallback:", err);
+
+    // === Fallback: NO getImageData ===
+    // edge: difference between shifted copies (pseudo edge)
+    ectx.save();
+    ectx.clearRect(0,0,atlasW,baseSliceH);
+    ectx.filter = 'contrast(250%)';
+    ectx.globalCompositeOperation = 'source-over';
+    ectx.drawImage(origC, 0, 0);
+    ectx.globalCompositeOperation = 'difference';
+    ectx.drawImage(origC, 1, 0); // shift x
+    ectx.drawImage(origC, 0, 1); // shift y
+    ectx.globalCompositeOperation = 'source-over';
+    ectx.restore();
+
+    // high-pass: fill gray then difference(orig, blur)
+    hctx.save();
+    hctx.clearRect(0,0,atlasW,baseSliceH);
+    hctx.filter = 'contrast(180%) brightness(110%)';
+    hctx.fillStyle = 'rgb(128,128,128)';
+    hctx.fillRect(0,0,atlasW,baseSliceH);
+    hctx.globalCompositeOperation = 'difference';
+    hctx.drawImage(blurC, 0, 0);
+    hctx.globalCompositeOperation = 'difference';
+    hctx.drawImage(origC, 0, 0);
+    hctx.globalCompositeOperation = 'source-over';
+    hctx.restore();
+
+    // diff mask: difference between current orig and prevC
+    dctx.save();
+    dctx.clearRect(0,0,atlasW,baseSliceH);
+    dctx.filter = 'contrast(300%)';
+    dctx.globalCompositeOperation = 'source-over';
+    dctx.drawImage(origC, 0, 0);
+    dctx.globalCompositeOperation = 'difference';
+    dctx.drawImage(prevC, 0, 0);
+    dctx.globalCompositeOperation = 'source-over';
+    dctx.restore();
   }
 
-  // read orig & blur for high-pass + diff
-  const origImg = octx.getImageData(0,0,atlasW,baseSliceH);
-  const blurImg = bctx.getImageData(0,0,atlasW,baseSliceH);
+  // update prevC for next diff (works for both routes)
+  pctx.clearRect(0,0,atlasW,baseSliceH);
+  pctx.drawImage(origC, 0, 0);
 
-  const lum = computeLuminanceArray(origImg);
-
-  // edge
-  const edgeRGBA = sobelEdgeFromLum(lum);
-  const edgeImg = new ImageData(edgeRGBA, atlasW, baseSliceH);
-  ectx.putImageData(edgeImg, 0, 0);
-
-  // high-pass (orig - blur) * 2 + 128
-  const hi = hctx.createImageData(atlasW, baseSliceH);
-  const od = origImg.data;
-  const bd = blurImg.data;
-  const hd = hi.data;
-  for (let i=0; i<od.length; i+=4){
-    const r = (od[i]   - bd[i])   * 2 + 128;
-    const g = (od[i+1] - bd[i+1]) * 2 + 128;
-    const b = (od[i+2] - bd[i+2]) * 2 + 128;
-    hd[i]   = clamp(r, 0, 255);
-    hd[i+1] = clamp(g, 0, 255);
-    hd[i+2] = clamp(b, 0, 255);
-    hd[i+3] = 255;
-  }
-  hctx.putImageData(hi, 0, 0);
-
-  // diff mask vs previous capture luminance
-  const di = dctx.createImageData(atlasW, baseSliceH);
-  const dd = di.data;
-  if (!prevCaptureLum) prevCaptureLum = new Float32Array(lum.length);
-
-  for (let p=0, i=0; p<lum.length; p++, i+=4){
-    const diff = Math.abs(lum[p] - prevCaptureLum[p]);
-    // threshold + boost
-    let v = (diff - 12.0) * 5.0; // adjust sensitivity
-    v = clamp(v, 0, 255);
-    dd[i] = v; dd[i+1] = v; dd[i+2] = v; dd[i+3] = 255;
-    prevCaptureLum[p] = lum[p];
-  }
-  dctx.putImageData(di, 0, 0);
-
-  // write bands into atlas top shelf (y=0..sliceH)
-  // band order: 0=edge, 1=low(blur), 2=high, 3=diff
+  // write bands into atlas top shelf
   actx.drawImage(edgeC, 0, 0, atlasW, baseSliceH, 0, 0*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(blurC, 0, 0, atlasW, baseSliceH, 0, 1*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(highC, 0, 0, atlasW, baseSliceH, 0, 2*baseSliceH, atlasW, baseSliceH);
   actx.drawImage(diffC, 0, 0, atlasW, baseSliceH, 0, 3*baseSliceH, atlasW, baseSliceH);
 
-  // slight fade to keep it “install-y”
   actx.fillStyle = "rgba(0,0,0,0.03)";
   actx.fillRect(0,0,atlasW,sliceH);
 
-  toast("Captured (layer-split) ✓");
+  toast("Captured ✓");
 }
+
 
 /* ------------------------------
    Motion detection (for interactivity, still per frame)
