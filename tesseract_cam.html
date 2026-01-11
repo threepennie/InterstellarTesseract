@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Tesseract Installation — Flickr Shelves (MaxTexture Safe)</title>
+  <title>Tesseract Installation — Flickr Shelves (Stable)</title>
   <style>
     html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#000; }
     #app { position:fixed; inset:0; }
@@ -15,21 +15,10 @@
       border: 1px solid rgba(255,255,255,.12);
       border-radius: 12px;
       padding: 10px 12px;
-      max-width: min(860px, calc(100vw - 24px));
+      max-width: min(900px, calc(100vw - 24px));
       backdrop-filter: blur(8px);
       user-select:none;
     }
-
-    window.addEventListener('offline', () => {
-  toast('Offline: DevToolsのNetworkがOfflineになっている可能性');
-  setStatus('OFFLINE (DevTools Network Offline?)');
-});
-window.addEventListener('online', () => {
-  toast('Online');
-  setStatus('Online');
-});
-
-
     #hud b { color:#fff; }
     #hud .row { opacity:.92; }
     #hud .dim { opacity:.65; }
@@ -49,7 +38,6 @@ window.addEventListener('online', () => {
     }
     #hud label{ display:inline-flex; align-items:center; gap:6px; }
     #hud input[type="checkbox"]{ width:auto; margin:0; transform: translateY(1px); }
-
     #toast{
       position:fixed; right:12px; bottom:12px; z-index:20;
       color:#fff; font: 12px ui-monospace, monospace;
@@ -88,7 +76,7 @@ window.addEventListener('online', () => {
     </div>
     <div class="row dim">
       GPU maxTexture: <span id="maxTex">?</span> /
-      slices(requested): <span id="reqSlices">?</span> /
+      slices(req): <span id="reqSlices">?</span> /
       slices(used): <span id="usedSlices">?</span>
     </div>
 
@@ -122,7 +110,16 @@ function toast(msg){
   toastTimer = setTimeout(()=> toastEl.classList.remove('show'), 1200);
 }
 
-/* ---------- Flickr feed JSONP (callback fixed: jsonFlickrFeed) ---------- */
+/* offline/online guard */
+window.addEventListener('offline', () => {
+  toast('OFFLINE (DevTools Network Offline?)');
+  setStatus('OFFLINE');
+});
+window.addEventListener('online', () => {
+  toast('ONLINE');
+});
+
+/* ---------- Flickr JSONP (callback fixed: jsonFlickrFeed) ---------- */
 function fetchFlickrPublicFeed(tags){
   return new Promise((resolve, reject)=>{
     const script = document.createElement('script');
@@ -166,7 +163,7 @@ function fetchFlickrPublicFeed(tags){
   });
 }
 
-/* ---------- optional proxy ---------- */
+/* ---------- proxy ---------- */
 function proxifyWeserv(url){
   const stripped = url.replace(/^https?:\/\//,'');
   const prox = new URL('https://images.weserv.nl/');
@@ -175,7 +172,6 @@ function proxifyWeserv(url){
   prox.searchParams.set('fit', 'contain');
   return prox.toString();
 }
-
 async function loadImage(url, useProxy){
   return new Promise((resolve, reject)=>{
     const img = new Image();
@@ -211,17 +207,18 @@ const dir = new THREE.DirectionalLight(0xffffff, 0.55);
 dir.position.set(2, 3, 1);
 scene.add(dir);
 
-/* ---------- Max texture size (CRITICAL FIX) ---------- */
+/* ---------- Max texture size (CRITICAL) ---------- */
 const MAX_TEX = renderer.capabilities.maxTextureSize || 8192;
 maxTexEl.textContent = String(MAX_TEX);
 
-/* ---------- Atlas & processing (keep canvas <= MAX_TEX) ---------- */
-let requestedSlices = 36;     // what user wants
-let slices = requestedSlices; // what we actually use (clamped)
+/* ---------- Atlas ---------- */
+let requestedSlices = 36;
+let slices = requestedSlices;
+
 let intervalSec = 4.0;
 let lastInsertT = -999;
 
-let atlasW = 512;            // smaller than 640 to save memory
+let atlasW = 512;
 let baseSliceH = 288;
 let sliceH = baseSliceH * 4;
 let atlasH = sliceH * slices;
@@ -240,7 +237,6 @@ const diffC = document.createElement('canvas');
 const prevC = document.createElement('canvas');
 
 function recomputeSlicesClamp(){
-  // slices * sliceH must be <= MAX_TEX
   const maxSlices = Math.max(4, Math.floor(MAX_TEX / Math.max(1, sliceH)));
   slices = Math.min(requestedSlices, maxSlices);
   reqSlicesEl.textContent = String(requestedSlices);
@@ -248,20 +244,12 @@ function recomputeSlicesClamp(){
 }
 
 function resizeAtlasForAspect(vw, vh){
-  atlasW = 512; // keep conservative
+  atlasW = 512;
   baseSliceH = Math.max(180, Math.round(atlasW * (vh / vw)));
   sliceH = baseSliceH * 4;
 
   recomputeSlicesClamp();
-
   atlasH = sliceH * slices;
-
-  // hard safety (should already hold)
-  if (atlasH > MAX_TEX) {
-    slices = Math.max(4, Math.floor(MAX_TEX / sliceH));
-    atlasH = sliceH * slices;
-    usedSlicesEl.textContent = String(slices);
-  }
 
   atlas.width = atlasW;
   atlas.height = atlasH;
@@ -276,10 +264,10 @@ function resizeAtlasForAspect(vw, vh){
     c.height = baseSliceH;
   }
 }
-
 resizeAtlasForAspect(16, 9);
 
 let mirror = true;
+
 function drawImageCover(ctx, img){
   const cw = atlasW, ch = baseSliceH;
   const iw = img.naturalWidth || img.width;
@@ -367,7 +355,6 @@ function buildLayersFromOrig(){
 }
 
 function insertTopShelf(){
-  // Firefox-safe shift (NO self-copy)
   const copyH = atlasH - sliceH;
   if (copyH > 0){
     shiftCtx.clearRect(0,0,shiftC.width,shiftC.height);
@@ -391,10 +378,12 @@ atlasTex.magFilter = THREE.LinearFilter;
 atlasTex.wrapS = THREE.ClampToEdgeWrapping;
 atlasTex.wrapT = THREE.ClampToEdgeWrapping;
 
-/* ---------- Shader ---------- */
+/* ---------- Single declaration HERE (no redeclare) ---------- */
+let colorMode = 0;
 let motion = 0.12;
 let motionPulse = 0.0;
 
+/* ---------- Shader ---------- */
 const baseUniforms = {
   uAtlas: { value: atlasTex },
   uAtlasSize: { value: new THREE.Vector2(atlasW, atlasH) },
@@ -426,7 +415,6 @@ const shelvesMat = new THREE.ShaderMaterial({
     precision highp float;
     varying vec2 vUv;
     varying float vDepth;
-
     uniform sampler2D uAtlas;
     uniform vec2 uAtlasSize;
     uniform float uSliceH;
@@ -595,7 +583,7 @@ function rebuildShelves(){
   }
 }
 
-/* ---------- Tesseract (same as before, minimal) ---------- */
+/* ---------- Tesseract ---------- */
 let tesseractEnabled = true;
 function tesseractVertices4D(){
   const vs = [];
@@ -662,7 +650,7 @@ function updateTesseract(t, m){
   lineMat.opacity = 0.25 + 0.55*(0.35 + m);
 }
 
-/* ---------- Dust (light) ---------- */
+/* ---------- Dust ---------- */
 let dustEnabled = true;
 const dustCount = 1800;
 const dustGeo = new THREE.BufferGeometry();
@@ -703,7 +691,7 @@ function updateDust(m){
   dustMat.opacity = 0.10 + 0.35*(0.35 + m);
 }
 
-/* ---------- Feed queue ---------- */
+/* ---------- Feed ---------- */
 let currentTags = document.getElementById('tags').value.trim();
 let feedQueue = [];
 let inFlightFetch = false;
@@ -716,12 +704,10 @@ async function refillQueue(){
   try{
     const data = await fetchFlickrPublicFeed(currentTags);
     const urls = (data?.items || []).map(it => it?.media?.m).filter(Boolean);
-
     for (let i = urls.length - 1; i > 0; i--){
       const j = Math.floor(Math.random() * (i + 1));
       [urls[i], urls[j]] = [urls[j], urls[i]];
     }
-
     feedQueue = urls;
     toast(`Flickr feed: ${feedQueue.length} items`);
   }catch(e){
@@ -735,7 +721,7 @@ async function refillQueue(){
 }
 
 async function nextPhoto(useProxy){
-  if (feedQueue.length < 6) refillQueue(); // async
+  if (feedQueue.length < 6) refillQueue();
   const url = feedQueue.shift();
   if (!url) return null;
   try{
@@ -749,7 +735,7 @@ async function nextPhoto(useProxy){
   }
 }
 
-/* ---------- Insert pipeline ---------- */
+/* ---------- Insert ---------- */
 let running = true;
 let inserting = false;
 
@@ -771,11 +757,9 @@ async function insertFromFlickr(t){
     const vw = img.naturalWidth || img.width || 16;
     const vh = img.naturalHeight || img.height || 9;
 
-    // aspect changes -> resize atlas but STILL keep <= MAX_TEX
     const newBase = Math.max(180, Math.round(atlasW * (vh / vw)));
     if (newBase !== baseSliceH){
       resizeAtlasForAspect(vw, vh);
-      // update uniforms & rebuild shelves after resize
       rebuildShelves();
       baseUniforms.uAtlasSize.value.set(atlasW, atlasH);
       baseUniforms.uSliceH.value = sliceH;
@@ -802,11 +786,11 @@ async function insertFromFlickr(t){
   inserting = false;
 }
 
-/* ---------- Build shelves now ---------- */
+/* ---------- start ---------- */
 rebuildShelves();
 
-/* ---------- Warm start ---------- */
-(function warmStart(){
+// warm start with noise
+{
   const t = performance.now()*0.001;
   const pctx = prevC.getContext('2d', { willReadFrequently:true });
   genFallbackNoise(pctx, t);
@@ -815,13 +799,12 @@ rebuildShelves();
   buildLayersFromOrig();
   insertTopShelf();
   atlasTex.needsUpdate = true;
-})();
+}
 
 refillQueue();
 
-/* ---------- Animate ---------- */
+/* ---------- loop ---------- */
 let last = performance.now();
-let colorMode = 0;
 function animate(now){
   const t = now * 0.001;
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -890,7 +873,6 @@ addEventListener('resize', ()=>{
   renderer.setSize(innerWidth, innerHeight);
 });
 
-/* hotkeys */
 const hud = document.getElementById('hud');
 addEventListener('keydown', (e)=>{
   const k = e.key.toLowerCase();
