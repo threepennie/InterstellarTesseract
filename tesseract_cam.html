@@ -3,41 +3,20 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Interstellar Flickr Grid</title>
+  <title>Interstellar Slit-Cube ? Flickr Faces Expand</title>
   <style>
     :root{
-      --bg: #000;
-      --fg: rgba(255,255,255,.85);
-      --dim: rgba(255,255,255,.55);
-
-      --cols: 14;
-      --rows: 8;
-
-      --gap: 10px;
-
-      /* 3D stage */
-      --persp: 900px;
-      --tiltX: 62deg;   /* Interstellar-ish shelf angle */
-      --tiltY: -18deg;
-      --spinZ: 18deg;
-
-      /* cell */
-      --cell-radius: 14px;
-      --cell-border: rgba(255,255,255,.14);
-
-      /* animation */
-      --pulse: 0.0;
+      --bg:#000;
+      --fg:rgba(255,255,255,.88);
+      --dim:rgba(255,255,255,.60);
+      --hudBg: rgba(0,0,0,.45);
+      --hudBd: rgba(255,255,255,.12);
     }
-
-    html, body {
-      margin:0; height:100%;
-      background: var(--bg);
-      overflow:hidden;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      color: var(--fg);
+    html, body{ height:100%; margin:0; overflow:hidden; background:var(--bg); color:var(--fg);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
     }
-
-    /* subtle film grain */
+    #app{ position:fixed; inset:0; }
+    /* subtle grain */
     body::before{
       content:"";
       position:fixed; inset:0;
@@ -48,19 +27,19 @@
       mix-blend-mode: overlay;
       opacity: .22;
     }
-
     #hud{
-      position:fixed; left:14px; top:14px; z-index:20;
-      background: rgba(0,0,0,.45);
-      border: 1px solid rgba(255,255,255,.12);
+      position:fixed; left:14px; top:14px; z-index:50;
+      background: var(--hudBg);
+      border:1px solid var(--hudBd);
       border-radius: 14px;
       padding: 10px 12px;
       user-select:none;
-      min-width: 320px;
       backdrop-filter: blur(6px);
+      min-width: 390px;
     }
     #hud .title{ font-weight:700; }
     #hud .row{ margin-top:6px; font-size:12px; line-height:1.4; color: var(--dim); }
+    #hud .k{ color: rgba(255,255,255,.92); font-weight:700; }
     #hud input{
       width: 250px;
       padding: 7px 9px;
@@ -72,7 +51,7 @@
       margin-left: 8px;
       font: inherit;
     }
-    #hud button{
+    #hud button, #hud label{
       margin-left: 8px;
       padding: 7px 10px;
       border-radius: 12px;
@@ -81,121 +60,12 @@
       color: var(--fg);
       cursor:pointer;
       font: inherit;
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
     }
     #hud button:hover{ background: rgba(255,255,255,.12); }
-    #hud .k { color: rgba(255,255,255,.85); font-weight:700; }
-
-    #stage{
-      position:fixed; inset:0;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      perspective: var(--persp);
-      transform-style: preserve-3d;
-    }
-
-    /* The "lattice" plane */
-    #lattice{
-      position:relative;
-      width: min(1400px, 94vw);
-      height: min(820px, 84vh);
-      transform-style: preserve-3d;
-      will-change: transform;
-      transform:
-        rotateX(var(--tiltX))
-        rotateY(var(--tiltY))
-        rotateZ(var(--spinZ));
-      filter: drop-shadow(0 30px 60px rgba(0,0,0,.55));
-    }
-
-    /* Grid lines overlay */
-    #lattice::before{
-      content:"";
-      position:absolute; inset:-4px;
-      pointer-events:none;
-      background:
-        repeating-linear-gradient(
-          0deg,
-          rgba(255,255,255,.08) 0px,
-          rgba(255,255,255,.08) 1px,
-          rgba(0,0,0,0) 1px,
-          rgba(0,0,0,0) calc((100% / var(--rows)) - 0px)
-        ),
-        repeating-linear-gradient(
-          90deg,
-          rgba(255,255,255,.07) 0px,
-          rgba(255,255,255,.07) 1px,
-          rgba(0,0,0,0) 1px,
-          rgba(0,0,0,0) calc((100% / var(--cols)) - 0px)
-        );
-      opacity: .35;
-      mix-blend-mode: screen;
-      border-radius: 22px;
-      mask-image: radial-gradient(circle at 50% 50%, black 40%, transparent 78%);
-    }
-
-    /* Actual grid container */
-    #grid{
-      position:absolute; inset:0;
-      display:grid;
-      grid-template-columns: repeat(var(--cols), 1fr);
-      grid-template-rows: repeat(var(--rows), 1fr);
-      gap: var(--gap);
-      padding: 14px;
-      transform-style: preserve-3d;
-    }
-
-    .cell{
-      position:relative;
-      border-radius: var(--cell-radius);
-      border: 1px solid var(--cell-border);
-      overflow:hidden;
-      background: rgba(255,255,255,.03);
-      transform-style: preserve-3d;
-      will-change: transform, opacity;
-      box-shadow:
-        inset 0 0 0 1px rgba(255,255,255,.05),
-        0 10px 26px rgba(0,0,0,.35);
-    }
-
-    /* Depth: each cell slightly lifted and wobbled */
-    .cell{
-      transform: translateZ(var(--z, 0px)) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
-      opacity: var(--op, .88);
-    }
-
-    .cell::after{
-      /* glass highlight */
-      content:"";
-      position:absolute; inset:0;
-      background: radial-gradient(circle at 20% 20%, rgba(255,255,255,.22), rgba(255,255,255,0) 55%);
-      opacity: .32;
-      mix-blend-mode: screen;
-      pointer-events:none;
-    }
-
-    img{
-      width:100%; height:100%;
-      object-fit: cover;
-      display:block;
-      transform: scale(1.02);
-      filter: contrast(1.05) saturate(1.08);
-      opacity: var(--imgop, 1);
-      transition: opacity 900ms ease;
-    }
-
-    .fadeIn img{ opacity: 1; }
-    .fadeOut img{ opacity: .08; }
-
-    /* bottom vignette */
-    #vignette{
-      position:fixed; inset:0;
-      pointer-events:none;
-      background: radial-gradient(circle at 50% 45%, rgba(0,0,0,0) 0 45%, rgba(0,0,0,.6) 75%, rgba(0,0,0,.92) 100%);
-      opacity: .85;
-      z-index: 10;
-    }
-
+    #hud input[type="checkbox"]{ width:auto; margin:0; }
     #toast{
       position:fixed;
       left:50%; bottom:14px; transform:translateX(-50%);
@@ -205,7 +75,7 @@
       border-radius: 14px;
       color: var(--fg);
       font-size: 12px;
-      z-index: 30;
+      z-index: 60;
       opacity:0;
       transition: opacity .18s ease;
       pointer-events:none;
@@ -218,14 +88,19 @@
   </style>
 </head>
 <body>
+  <div id="app"></div>
 
   <div id="hud">
-    <div class="title">Interstellar Flickr Grid</div>
+    <div class="title">Interstellar Slit?Cube (Flickr) ? 外に出ると面が展開</div>
     <div class="row">
       Tags:
       <input id="tags" value="space,nebula,night" />
       <button id="apply">Apply</button>
       <button id="pause">Pause</button>
+      <label title="画像がCORSで落ちる時はON">
+        <input id="proxy" type="checkbox" checked />
+        Proxy
+      </label>
     </div>
     <div class="row">
       Status: <span id="status">init…</span>
@@ -233,294 +108,445 @@
       <span style="margin-left:10px;">Pool: <span id="pool">0</span></span>
     </div>
     <div class="row">
-      Keys: <span class="k">H</span> HUD / <span class="k">R</span> Reload feed / <span class="k">Space</span> Pause
+      Camera: <span id="cam">-</span> / Expand: <span id="exp">0.00</span>
+    </div>
+    <div class="row">
+      操作: Drag=orbit / Wheel=zoom（キューブ内→外へ）
+      Keys: <span class="k">H</span> HUD <span class="k">R</span> Reload <span class="k">Space</span> Pause
+      <span class="k">S</span> Slit axis <span class="k">[</span>/<span class="k">]</span> Slats
     </div>
   </div>
 
-  <div id="stage">
-    <div id="lattice">
-      <div id="grid"></div>
-    </div>
-  </div>
-
-  <div id="vignette"></div>
   <div id="toast"></div>
 
-<script>
-(() => {
-  const $ = (sel) => document.querySelector(sel);
-  const grid = $("#grid");
-  const hud = $("#hud");
-  const statusEl = $("#status");
-  const loadedEl = $("#loaded");
-  const poolEl = $("#pool");
-  const tagsInput = $("#tags");
-  const applyBtn = $("#apply");
-  const pauseBtn = $("#pause");
-  const toastEl = $("#toast");
+<script type="module">
+import * as THREE from 'https://esm.sh/three@0.160.0';
+import { OrbitControls } from 'https://esm.sh/three@0.160.0/examples/jsm/controls/OrbitControls.js';
 
-  const COLS = 14;
-  const ROWS = 8;
-  const CELLS = COLS * ROWS;
+const $ = (s)=>document.querySelector(s);
+const statusEl = $("#status");
+const loadedEl = $("#loaded");
+const poolEl = $("#pool");
+const camEl = $("#cam");
+const expEl = $("#exp");
+const tagsInput = $("#tags");
+const applyBtn = $("#apply");
+const pauseBtn = $("#pause");
+const proxyChk = $("#proxy");
+const hud = $("#hud");
+const toastEl = $("#toast");
 
-  let paused = false;
-  let currentTags = tagsInput.value.trim() || "space,nebula,night";
+function setStatus(s){ statusEl.textContent = s; }
+let toastTimer=0;
+function toast(msg){
+  toastEl.textContent = msg;
+  toastEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>toastEl.classList.remove("show"), 1200);
+}
 
-  // Pool of image URLs
-  let urlPool = [];
-  let loadedCount = 0;
+const app = $("#app");
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false, powerPreference:'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x000000, 1);
+app.appendChild(renderer.domElement);
 
-  // Timing
-  const INTERVAL_MS = 4000;
-  let lastTick = performance.now();
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000000, 0.055);
 
-  function setStatus(s){ statusEl.textContent = s; }
-  function toast(msg){
-    toastEl.textContent = msg;
-    toastEl.classList.add("show");
-    setTimeout(() => toastEl.classList.remove("show"), 1200);
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.05, 200);
+camera.position.set(0.8, 0.4, 4.2);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 0.3;   // allow going inside
+controls.maxDistance = 12.0;
+
+addEventListener("resize", ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// === Star dust ===
+{
+  const N = 1600;
+  const g = new THREE.BufferGeometry();
+  const p = new Float32Array(N*3);
+  for (let i=0;i<N;i++){
+    p[i*3+0] = (Math.random()-0.5)*28;
+    p[i*3+1] = (Math.random()-0.5)*18;
+    p[i*3+2] = (Math.random()-0.5)*28;
   }
-  function updateCounters(){
-    loadedEl.textContent = String(loadedCount);
-    poolEl.textContent = String(urlPool.length);
-  }
+  g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+  const m = new THREE.PointsMaterial({ size:0.012, transparent:true, opacity:0.30, depthWrite:false });
+  const pts = new THREE.Points(g, m);
+  scene.add(pts);
+}
 
-  // --- Create cells
-  const cells = [];
-  for (let i=0; i<CELLS; i++){
-    const cell = document.createElement("div");
-    cell.className = "cell";
+// ============================================================
+// Flickr Public Feed (JSONP, API key不要)
+// ============================================================
+let currentTags = tagsInput.value.trim() || "space,nebula,night";
+let urlPool = [];
+let loadedCount = 0;
+let paused = false;
 
-    // Depth styling (Interstellar-ish)
-    const x = i % COLS;
-    const y = Math.floor(i / COLS);
+function updateCounters(){
+  loadedEl.textContent = String(loadedCount);
+  poolEl.textContent = String(urlPool.length);
+}
 
-    // Depth gradient: center forward, edges back
-    const nx = (x/(COLS-1))*2 - 1;
-    const ny = (y/(ROWS-1))*2 - 1;
-    const r = Math.sqrt(nx*nx + ny*ny);
+function flickrFeed(tags){
+  return new Promise((resolve, reject) => {
+    const cb = "__flickr_cb_" + Date.now() + "_" + Math.random().toString(16).slice(2);
+    const script = document.createElement("script");
 
-    const z = (1 - r) * 60 + (Math.random()*14 - 7);     // px
-    const rx = (Math.random()*2 - 1) * 2.5;              // deg
-    const ry = (Math.random()*2 - 1) * 2.5;
+    let timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Flickr feed timeout"));
+    }, 9000);
 
-    cell.style.setProperty("--z", `${z.toFixed(1)}px`);
-    cell.style.setProperty("--rx", `${rx.toFixed(2)}deg`);
-    cell.style.setProperty("--ry", `${ry.toFixed(2)}deg`);
-    cell.style.setProperty("--op", `${(0.68 + (1-r)*0.28).toFixed(2)}`);
-
-    const img = document.createElement("img");
-    img.alt = "flickr";
-    img.decoding = "async";
-    img.loading = "lazy";
-    img.style.opacity = "0";
-    cell.appendChild(img);
-
-    grid.appendChild(cell);
-    cells.push(cell);
-  }
-
-  // --- Flickr Public Feed (JSONP, no API key)
-  // We request: https://www.flickr.com/services/feeds/photos_public.gne?format=json&tags=...&tagmode=all&lang=en-us&jsoncallback=CALLBACK
-  function flickrFeed(tags){
-    return new Promise((resolve, reject) => {
-      const cb = "__flickr_cb_" + Date.now() + "_" + Math.random().toString(16).slice(2);
-      const script = document.createElement("script");
-
-      let timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error("Flickr feed timeout"));
-      }, 9000);
-
-      function cleanup(){
-        clearTimeout(timeout);
-        delete window[cb];
-        script.remove();
-      }
-
-      window[cb] = (data) => {
-        cleanup();
-        try{
-          const items = (data && data.items) ? data.items : [];
-          // items[i].media.m is typically _m.jpg (small). Try to swap to a bigger size when possible.
-          const urls = items.map(it => {
-            const u = it?.media?.m;
-            if (!u) return null;
-            // Try larger: _m -> _b or _c (not always valid, but often works)
-            // We'll try _b first; if that fails onload, browser will show broken image in that cell only (rare).
-            return u.replace("_m.", "_b.");
-          }).filter(Boolean);
-
-          resolve(urls);
-        } catch (e){
-          reject(e);
-        }
-      };
-
-      const src =
-        "https://www.flickr.com/services/feeds/photos_public.gne" +
-        "?format=json" +
-        "&lang=en-us" +
-        "&tagmode=all" +
-        "&tags=" + encodeURIComponent(tags) +
-        "&jsoncallback=" + encodeURIComponent(cb) +
-        "&_=" + Date.now(); // cache bust
-
-      script.src = src;
-      script.onerror = () => {
-        cleanup();
-        reject(new Error("Flickr feed script error"));
-      };
-
-      document.head.appendChild(script);
-    });
-  }
-
-  async function refillPool(){
-    setStatus("fetching flickr feed…");
-    try{
-      const urls = await flickrFeed(currentTags);
-      // Shuffle for variety
-      for (let i = urls.length - 1; i > 0; i--){
-        const j = (Math.random() * (i+1)) | 0;
-        [urls[i], urls[j]] = [urls[j], urls[i]];
-      }
-      // Merge (keep size bounded)
-      urlPool = urls.concat(urlPool).slice(0, 400);
-      setStatus(`ok (${urls.length} items)`);
-      updateCounters();
-      toast(`Feed loaded: ${urls.length} photos`);
-    } catch (e){
-      setStatus("feed failed (retrying soon)");
-      toast("Feed failed. Check network.");
-      // Keep running; we'll retry later
-    }
-  }
-
-  // --- Assign an image to a random cell with gentle transition
-  function injectOne(){
-    if (urlPool.length === 0) return;
-    const url = urlPool.pop();
-    const idx = (Math.random() * cells.length) | 0;
-    const cell = cells[idx];
-    const img = cell.querySelector("img");
-
-    // fade out old
-    cell.classList.remove("fadeIn");
-    cell.classList.add("fadeOut");
-
-    // swap after short delay to allow fade
-    setTimeout(() => {
-      img.style.opacity = "0";
-      img.onload = () => {
-        loadedCount++;
-        updateCounters();
-        cell.classList.remove("fadeOut");
-        cell.classList.add("fadeIn");
-        img.style.opacity = "1";
-      };
-      img.onerror = () => {
-        // If larger size fails, fall back to original _m
-        const fallback = url.replace("_b.", "_m.");
-        if (img.src !== fallback){
-          img.src = fallback;
-          return;
-        }
-        // If still fails, drop silently
-      };
-      img.src = url;
-    }, 220);
-  }
-
-  // --- Initial fill
-  async function init(){
-    document.documentElement.style.setProperty("--cols", COLS);
-    document.documentElement.style.setProperty("--rows", ROWS);
-
-    await refillPool();
-
-    // Seed a bunch quickly
-    for (let i=0; i<Math.min(40, CELLS); i++){
-      injectOne();
+    function cleanup(){
+      clearTimeout(timeout);
+      try{ delete window[cb]; }catch(_){}
+      script.remove();
     }
 
-    setStatus("running");
-    updateCounters();
-  }
+    window[cb] = (data) => {
+      cleanup();
+      try{
+        const items = (data && data.items) ? data.items : [];
+        const urls = items.map(it => {
+          const u = it?.media?.m;
+          if (!u) return null;
+          // try bigger
+          return u.replace("_m.", "_b.");
+        }).filter(Boolean);
+        resolve(urls);
+      } catch(e){ reject(e); }
+    };
 
-  // --- 3D camera-ish mouse parallax
-  let mx = 0, my = 0;
-  let tx = 0, ty = 0;
-  const lattice = $("#lattice");
+    const src =
+      "https://www.flickr.com/services/feeds/photos_public.gne" +
+      "?format=json" +
+      "&lang=en-us" +
+      "&tagmode=all" +
+      "&tags=" + encodeURIComponent(tags) +
+      "&jsoncallback=" + encodeURIComponent(cb) +
+      "&_=" + Date.now();
 
-  window.addEventListener("pointermove", (e) => {
-    mx = (e.clientX / innerWidth) * 2 - 1;
-    my = (e.clientY / innerHeight) * 2 - 1;
+    script.src = src;
+    script.onerror = () => { cleanup(); reject(new Error("Flickr feed script error")); };
+    document.head.appendChild(script);
   });
+}
 
-  function animate(){
-    requestAnimationFrame(animate);
+function viaProxy(u){
+  const enc = encodeURIComponent(u);
+  return `https://images.weserv.nl/?url=${enc.replace(/^https%3A%2F%2F/, "")}&default=black&output=jpg`;
+}
 
-    // smoothing
-    tx += (mx - tx) * 0.06;
-    ty += (my - ty) * 0.06;
-
-    // parallax transform (subtle, cinematic)
-    const rx = 62 + ty * 3.5;
-    const ry = -18 + tx * 6.0;
-    const rz = 18 + tx * 1.5;
-
-    lattice.style.transform =
-      `rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg) translateZ(0px)`;
-
-    // tick inject
-    const now = performance.now();
-    if (!paused && now - lastTick > INTERVAL_MS){
-      lastTick = now;
-
-      // If pool is running low, refill in background
-      if (urlPool.length < 24) refillPool();
-
-      // Inject a few per tick for living lattice
-      injectOne();
-      if (Math.random() < 0.55) injectOne();
+async function refillPool(){
+  setStatus("fetching flickr feed…");
+  try{
+    const urls = await flickrFeed(currentTags);
+    for (let i = urls.length - 1; i > 0; i--){
+      const j = (Math.random() * (i+1)) | 0;
+      [urls[i], urls[j]] = [urls[j], urls[i]];
     }
+    urlPool = urls.concat(urlPool).slice(0, 600);
+    setStatus(`ok (${urls.length} items)`);
+    toast(`Feed loaded: ${urls.length} photos`);
+    updateCounters();
+  }catch(e){
+    setStatus("feed failed (retry soon)");
+    toast("Feed failed. Check network / extensions.");
   }
+}
 
-  // --- Controls
-  applyBtn.onclick = async () => {
-    currentTags = tagsInput.value.trim() || "space,nebula,night";
-    toast("Tags applied: " + currentTags);
-    urlPool = [];
+function popUrl(){
+  if (!urlPool.length) return null;
+  return urlPool.pop();
+}
+
+// ============================================================
+// Slit-Cube geometry
+// ============================================================
+const cube = new THREE.Group();
+scene.add(cube);
+
+// faint outline
+{
+  const box = new THREE.BoxGeometry(2.2, 2.2, 2.2);
+  const edges = new THREE.EdgesGeometry(box);
+  const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.14 }));
+  cube.add(line);
+}
+
+const faceSize = 2.2;
+const half = faceSize/2;
+let slatsPerFace = 16;
+let slitAxisMode = 0; // 0: vertical, 1: horizontal
+
+const texLoader = new THREE.TextureLoader();
+texLoader.crossOrigin = "anonymous";
+
+function makeMaterial(){
+  return new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.0,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+}
+
+let slatEntries = []; // {mesh, collapsed, expanded, idx, faceId}
+
+function clearSlats(){
+  for (const e of slatEntries){
+    e.mesh.geometry.dispose();
+    if (e.mesh.material.map) e.mesh.material.map.dispose();
+    e.mesh.material.dispose();
+    cube.remove(e.mesh);
+  }
+  slatEntries = [];
+}
+
+function buildFaceSlats(faceId, normal){
+  const n = normal.clone().normalize();
+  const up = Math.abs(n.y) < 0.9 ? new THREE.Vector3(0,1,0) : new THREE.Vector3(1,0,0);
+  const u = new THREE.Vector3().crossVectors(up, n).normalize();
+  const v = new THREE.Vector3().crossVectors(n, u).normalize();
+
+  const varyAxis = (slitAxisMode === 0) ? u : v;
+  const extendAxis = (slitAxisMode === 0) ? v : u;
+
+  const thickness = faceSize / slatsPerFace;
+  const slatW = thickness * 0.82;
+  const slatH = faceSize * 0.96;
+
+  const geom = new THREE.PlaneGeometry(
+    slitAxisMode === 0 ? slatW : slatH,
+    slitAxisMode === 0 ? slatH : slatW,
+    1, 1
+  );
+
+  const faceCenter = n.clone().multiplyScalar(half);
+
+  for (let i=0;i<slatsPerFace;i++){
+    const t = (i/(slatsPerFace-1))*2 - 1;
+    const expanded = faceCenter.clone().add(varyAxis.clone().multiplyScalar(t * (half*0.92)));
+
+    const stack = (i - (slatsPerFace-1)/2) * 0.004;
+    const collapsed = faceCenter.clone().add(n.clone().multiplyScalar(stack));
+
+    const mat = makeMaterial();
+    const mesh = new THREE.Mesh(geom, mat);
+
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1), n);
+    mesh.quaternion.copy(q);
+
+    const tilt = (Math.random()*2 - 1) * 0.03;
+    mesh.rotateOnAxis(extendAxis, tilt);
+
+    mesh.position.copy(collapsed);
+    mesh.renderOrder = 2;
+    cube.add(mesh);
+
+    slatEntries.push({ mesh, collapsed, expanded, idx:i, faceId });
+  }
+}
+
+function buildCubeSlats(){
+  clearSlats();
+  const faces = [
+    {id:0, n:new THREE.Vector3( 0, 0, 1)},
+    {id:1, n:new THREE.Vector3( 0, 0,-1)},
+    {id:2, n:new THREE.Vector3( 1, 0, 0)},
+    {id:3, n:new THREE.Vector3(-1, 0, 0)},
+    {id:4, n:new THREE.Vector3( 0, 1, 0)},
+    {id:5, n:new THREE.Vector3( 0,-1, 0)},
+  ];
+  for (const f of faces) buildFaceSlats(f.id, f.n);
+}
+buildCubeSlats();
+
+// ============================================================
+// Expansion logic
+// ============================================================
+function outsideFactor(camPos){
+  const margin = 1.0;
+  const dx = Math.max(0, Math.abs(camPos.x) - half);
+  const dy = Math.max(0, Math.abs(camPos.y) - half);
+  const dz = Math.max(0, Math.abs(camPos.z) - half);
+  const m = Math.max(dx, dy, dz);
+  const t = THREE.MathUtils.clamp(m / margin, 0, 1);
+  return t*t*(3-2*t); // smoothstep
+}
+
+// ============================================================
+// Photo assignment
+// ============================================================
+let lastAssignAt = performance.now();
+const ASSIGN_INTERVAL_MS = 1000;
+let assignBurst = 3;
+
+function assignTextureTo(mesh, url){
+  if (!url) return;
+  const finalUrl = proxyChk.checked ? viaProxy(url) : url;
+
+  texLoader.load(
+    finalUrl,
+    (tex)=>{
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+      if (mesh.material.map) mesh.material.map.dispose();
+      mesh.material.map = tex;
+      mesh.material.opacity = Math.max(mesh.material.opacity, 0.22);
+      mesh.material.needsUpdate = true;
+
+      loadedCount++;
+      updateCounters();
+    },
+    undefined,
+    ()=>{
+      const fb = finalUrl.replace("_b.", "_m.");
+      if (fb !== finalUrl){
+        texLoader.load(fb, (tex)=>{
+          if (mesh.material.map) mesh.material.map.dispose();
+          mesh.material.map = tex;
+          mesh.material.opacity = Math.max(mesh.material.opacity, 0.22);
+          mesh.material.needsUpdate = true;
+
+          loadedCount++;
+          updateCounters();
+        });
+      }
+    }
+  );
+}
+
+function seedTextures(n=24){
+  for (let i=0;i<n;i++){
+    const url = popUrl();
+    if (!url) break;
+    const e = slatEntries[(Math.random()*slatEntries.length)|0];
+    assignTextureTo(e.mesh, url);
+  }
+}
+
+// ============================================================
+// UI
+// ============================================================
+applyBtn.onclick = async ()=>{
+  currentTags = tagsInput.value.trim() || "space,nebula,night";
+  toast("Tags applied: " + currentTags);
+  urlPool = [];
+  updateCounters();
+  await refillPool();
+  seedTextures(48);
+};
+
+pauseBtn.onclick = ()=>{
+  paused = !paused;
+  pauseBtn.textContent = paused ? "Resume" : "Pause";
+  toast(paused ? "Paused" : "Resumed");
+};
+
+addEventListener("keydown", async (e)=>{
+  const k = e.key.toLowerCase();
+  if (k === "h"){
+    hud.style.display = (hud.style.display === "none") ? "block" : "none";
+    toast(hud.style.display === "none" ? "HUD hidden" : "HUD shown");
+  }
+  if (k === "r"){
     await refillPool();
-  };
-
-  function togglePause(){
+    seedTextures(24);
+    toast("Reload feed");
+  }
+  if (k === "s"){
+    slitAxisMode = (slitAxisMode + 1) % 2;
+    buildCubeSlats();
+    seedTextures(60);
+    toast("Slit axis: " + (slitAxisMode===0 ? "Vertical" : "Horizontal"));
+  }
+  if (e.code === "Space"){
+    e.preventDefault();
     paused = !paused;
     pauseBtn.textContent = paused ? "Resume" : "Pause";
     toast(paused ? "Paused" : "Resumed");
   }
+  if (k === "["){
+    slatsPerFace = Math.max(8, slatsPerFace - 2);
+    buildCubeSlats();
+    seedTextures(60);
+    toast("Slats per face: " + slatsPerFace);
+  }
+  if (k === "]"){
+    slatsPerFace = Math.min(28, slatsPerFace + 2);
+    buildCubeSlats();
+    seedTextures(60);
+    toast("Slats per face: " + slatsPerFace);
+  }
+}, { passive:false });
 
-  pauseBtn.onclick = togglePause;
+// ============================================================
+// Render
+// ============================================================
+let t0 = performance.now();
+function animate(){
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const t = (now - t0) * 0.001;
 
-  window.addEventListener("keydown", (e) => {
-    if (e.key.toLowerCase() === "h"){
-      hud.style.display = (hud.style.display === "none") ? "block" : "none";
-      toast(hud.style.display === "none" ? "HUD hidden" : "HUD shown");
-    }
-    if (e.key.toLowerCase() === "r"){
-      refillPool();
-      toast("Reloading feed…");
-    }
-    if (e.code === "Space"){
-      e.preventDefault();
-      togglePause();
-    }
-  }, { passive:false });
+  controls.update();
 
-  // Start
-  init().then(animate);
-})();
+  const camPos = camera.position;
+  camEl.textContent = `${camPos.x.toFixed(2)}, ${camPos.y.toFixed(2)}, ${camPos.z.toFixed(2)}`;
+
+  const k = outsideFactor(camPos);
+  expEl.textContent = k.toFixed(2);
+
+  for (const e of slatEntries){
+    e.mesh.position.lerpVectors(e.collapsed, e.expanded, k);
+
+    const base = 0.08 + k*0.42;
+    const wob = Math.sin(t*0.8 + e.idx*0.6 + e.faceId*1.3) * 0.02;
+    e.mesh.material.opacity = THREE.MathUtils.clamp(base + wob, 0.02, 0.68);
+
+    const c = 0.82 + 0.18*Math.sin(t*0.5 + e.faceId);
+    e.mesh.material.color.setScalar(c);
+  }
+
+  if (!paused && now - lastAssignAt > ASSIGN_INTERVAL_MS){
+    lastAssignAt = now;
+    if (urlPool.length < 18) refillPool();
+    for (let i=0;i<assignBurst;i++){
+      const url = popUrl();
+      if (!url) break;
+      const e = slatEntries[(Math.random()*slatEntries.length)|0];
+      assignTextureTo(e.mesh, url);
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+
+async function init(){
+  setStatus("init…");
+  updateCounters();
+  await refillPool();
+  seedTextures(70);
+  setStatus("running");
+  toast("Zoom inside cube → move outside to expand faces");
+  animate();
+}
+init();
 </script>
 </body>
 </html>
