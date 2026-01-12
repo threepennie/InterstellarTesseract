@@ -1,0 +1,1346 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Flickr Interstellar — 3D Slit Lattice (Seed4 FillAll → +4/sec)</title>
+  <style>
+    html, body { margin:0; height:100%; overflow:hidden; background:#000; }
+    #app { position:fixed; inset:0; }
+
+    #hud{
+      position:fixed; left:14px; top:14px; z-index:20;
+      color: rgba(255,255,255,.88);
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+      background: rgba(0,0,0,.45);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 14px;
+      padding: 10px 12px;
+      user-select:none;
+      backdrop-filter: blur(6px);
+      min-width: 520px;
+    }
+    #hud .title{ font-weight:700; color:#fff; }
+    #hud .row{ margin-top:6px; color: rgba(255,255,255,.62); }
+    #hud .k{ color: rgba(255,255,255,.92); font-weight:700; }
+
+    #hud input{
+      width: 260px;
+      padding: 7px 9px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(255,255,255,.06);
+      color: rgba(255,255,255,.92);
+      outline:none;
+      margin-left: 8px;
+      font: inherit;
+    }
+    #hud button, #hud label{
+      margin-left: 8px;
+      padding: 7px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(255,255,255,.08);
+      color: rgba(255,255,255,.92);
+      cursor:pointer;
+      font: inherit;
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+    }
+    #hud button:hover{ background: rgba(255,255,255,.12); }
+    #hud input[type="checkbox"]{ width:auto; margin:0; }
+
+    #toast{
+      position:fixed; left:50%; bottom:14px; transform:translateX(-50%);
+      padding: 10px 14px;
+      background: rgba(0,0,0,.6);
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 14px;
+      color: rgba(255,255,255,.92);
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","CourierNew", monospace;
+      opacity:0; pointer-events:none;
+      transition: opacity .18s ease;
+      z-index: 30;
+      max-width: 86vw;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #toast.show{ opacity:1; }
+
+    #wrapflash{
+      position:fixed; inset:0; z-index:25;
+      background: radial-gradient(circle at center, rgba(255,255,255,.12), rgba(0,0,0,0) 55%);
+      opacity:0; pointer-events:none;
+      transition: opacity .08s ease;
+      mix-blend-mode: screen;
+    }
+    #wrapflash.on{ opacity:1; }
+
+    body::before{
+      content:"";
+      position:fixed; inset:0;
+      pointer-events:none;
+      background-image:
+        repeating-linear-gradient(0deg, rgba(255,255,255,.03) 0 1px, rgba(0,0,0,0) 1px 3px),
+        repeating-linear-gradient(90deg, rgba(255,255,255,.02) 0 1px, rgba(0,0,0,0) 1px 4px);
+      mix-blend-mode: overlay;
+      opacity: .22;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="hud">
+    <div class="title">Flickr Interstellar — 3D空間（縦スリット＋横ストリップ＋奥行きストリップ）/ 最初の7枚を全面展開 → 以後1秒に10枚</div>
+    <div class="row">
+      Tags:
+      <input id="tags" value="family" />
+      <button id="apply">Apply</button>
+      <button id="pause">Pause</button>
+      <label title="テクスチャが黒/失敗する場合はON推奨">
+        <input id="proxy" type="checkbox" checked />
+        Proxy
+      </label>
+      <label title="奥行きレイヤ数(重いときは減らす)">
+        Layers:
+        <input id="layers" type="number" min="3" max="22" value="12" style="width:66px;margin-left:6px;">
+      </label>
+    </div>
+    <div class="row">
+      Status: <span id="status">init…</span>
+      <span style="margin-left:10px;">Cell: <span id="cell">0,0,0</span></span>
+      <span style="margin-left:10px;">Loaded: <span id="loaded">0</span></span>
+      <span style="margin-left:10px;">Pool: <span id="pool">0</span></span>
+      <span style="margin-left:10px;">In-flight: <span id="inflight">0</span></span>
+      <span style="margin-left:10px;">Targets: <span id="targets">0</span></span>
+    </div>
+    <div class="row">
+      操作: Drag=orbit / Wheel=zoom（壁を通過して外に出ると、同サイズの立方体へ自動ラップ）　
+      Keys: <span class="k">H</span> HUD <span class="k">R</span> Reload <span class="k">Space</span> Pause
+      <span class="k">T</span> Tunnel On/Off  <span class="k">X</span> HorizontalStrips  <span class="k">Z</span> DepthStrips  <span class="k">V</span> AetherBG  <span class="k">WASD</span>/<span class="k">Arrows</span> Move  <span class="k">Shift</span> Boost  <span class="k">M</span> MoveToggle
+    </div>
+  </div>
+
+  <div id="toast"></div>
+  <div id="wrapflash"></div>
+
+<script type="module">
+import * as THREE from 'https://esm.sh/three@0.160.0';
+import { OrbitControls } from 'https://esm.sh/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+const $ = (s)=>document.querySelector(s);
+const app = $("#app");
+const hud = $("#hud");
+const toastEl = $("#toast");
+const wrapflashEl = $("#wrapflash");
+
+const statusEl = $("#status");
+const loadedEl = $("#loaded");
+const poolEl = $("#pool");
+const inflightEl = $("#inflight");
+const targetsEl = $("#targets");
+const cellEl = $("#cell");
+
+const tagsInput = $("#tags");
+const layersInput = $("#layers");
+const applyBtn = $("#apply");
+const pauseBtn = $("#pause");
+const proxyChk = $("#proxy");
+
+function setStatus(s){ statusEl.textContent = s; }
+let toastTimer=0;
+function wrapFlash(){
+  wrapflashEl.classList.add('on');
+  clearTimeout(wrapFlash._t);
+  wrapFlash._t = setTimeout(()=>wrapflashEl.classList.remove('on'), 90);
+}
+
+function toast(msg){
+  toastEl.textContent = msg;
+  toastEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>toastEl.classList.remove("show"), 1200);
+}
+
+// ============================================================
+// THREE basics
+// ============================================================
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false, powerPreference:'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x000000, 1);
+app.appendChild(renderer.domElement);
+
+// ============================================================
+// AMBIENT AUDIO (loop): solitude.mp3 placed next to this HTML
+// Autoplay is often blocked; we start on first user interaction.
+// ============================================================
+const ambientAudio = new Audio("solitude.mp3");
+ambientAudio.loop = true;
+ambientAudio.preload = "auto";
+ambientAudio.volume = 0.65;
+
+let audioStarted = false;
+async function startAudio(){
+  if (audioStarted) return;
+  try{
+    await ambientAudio.play();
+    audioStarted = true;
+    toast("Audio: ON");
+  }catch(err){
+    // Autoplay blocked until user gesture; we'll retry on interactions.
+    // Keep silent.
+  }
+}
+
+// Try once on load (may be blocked)
+startAudio();
+
+// Ensure we start audio on first user gesture
+window.addEventListener("pointerdown", startAudio, { once: true });
+window.addEventListener("keydown", startAudio, { once: true });
+
+
+// Make canvas focusable for reliable keyboard input
+renderer.domElement.tabIndex = 0;
+renderer.domElement.style.outline = 'none';
+renderer.domElement.addEventListener('pointerdown', ()=>renderer.domElement.focus());
+
+
+// ============================================================
+// AETHER BACKGROUND (outside the cube): scene.background texture with gentle drift
+// ============================================================
+let aetherBgEnabled = true;
+let aetherBgTex = null;
+
+function makeAetherBgTexture(size=512){
+  try{
+    const c = document.createElement("canvas");
+    c.width = c.height = size;
+    let ctx = null;
+    try { ctx = c.getContext("2d", { willReadFrequently: true }); } catch (_) {}
+    if (!ctx) ctx = c.getContext("2d");
+    if (!ctx) return null;
+
+    // base noise
+    const img = ctx.createImageData(size, size);
+    for (let i=0; i<img.data.length; i+=4){
+      const v = (Math.random()*120)|0; // darker base noise
+      img.data[i+0] = v;
+      img.data[i+1] = v;
+      img.data[i+2] = v;
+      img.data[i+3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    // soft blobs (ether)
+    ctx.globalCompositeOperation = "screen";
+    for (let i=0;i<42;i++){
+      const x = Math.random()*size;
+      const y = Math.random()*size;
+      const r = (size*0.05) + Math.random()*(size*0.22);
+      const g = ctx.createRadialGradient(x,y,0, x,y,r);
+      g.addColorStop(0, "rgba(255,255,255,0.10)");
+      g.addColorStop(1, "rgba(0,0,0,0.0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x,y,r,0,Math.PI*2);
+      ctx.fill();
+    }
+
+    // final darken pass
+    ctx.globalCompositeOperation = "multiply";
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0,0,size,size);
+    ctx.globalCompositeOperation = "source-over";
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(1.6, 1.6);
+    tex.offset.set(Math.random(), Math.random());
+    tex.needsUpdate = true;
+    return tex;
+  }catch(_){
+    return null;
+  }
+}
+
+function initAetherBackground(){
+  aetherBgTex = makeAetherBgTexture(512);
+  if (!aetherBgTex){
+    console.warn("Aether background: texture init failed; disabling.");
+    aetherBgEnabled = false;
+    return;
+  }
+  scene.background = aetherBgTex;
+}
+// initAetherBackground() will be called after scene is created
+
+
+
+const scene = new THREE.Scene();
+initAetherBackground();
+
+scene.fog = new THREE.FogExp2(0x000000, 0.040);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.05, 240);
+camera.position.set(0.2, 0.3, 4.4);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+
+// Orbit pivot almost at the camera position (keeps mouse OrbitControls working, feels POV-like)
+const ORBIT_EPS = 0.01; // tweak 0.005..0.05
+const _orbitDir = new THREE.Vector3();
+function updateOrbitTarget(){
+  camera.getWorldDirection(_orbitDir);
+  if (_orbitDir.lengthSq() < 1e-6) _orbitDir.set(0,0,-1);
+  _orbitDir.normalize();
+  controls.target.copy(camera.position).add(_orbitDir.multiplyScalar(ORBIT_EPS));
+}
+updateOrbitTarget();
+
+// Make orbit pivot closer to camera (tighter angle control)
+const ORBIT_TARGET_DIST = 1.25;
+{
+  const _dir = new THREE.Vector3();
+  camera.getWorldDirection(_dir);
+  controls.target.copy(camera.position).add(_dir.multiplyScalar(ORBIT_TARGET_DIST));
+}
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.update();
+controls.minDistance = 0.35;
+controls.maxDistance = 18.0;
+controls.enableKeys = false; // we'll handle movement ourselves
+controls.enablePan = false;
+
+addEventListener("resize", ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// Star dust
+{
+  const N = 1800;
+  const g = new THREE.BufferGeometry();
+  const p = new Float32Array(N*3);
+  for (let i=0;i<N;i++){
+    p[i*3+0] = (Math.random()-0.5)*40;
+    p[i*3+1] = (Math.random()-0.5)*24;
+    p[i*3+2] = (Math.random()-0.5)*44;
+  }
+  g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+  const m = new THREE.PointsMaterial({ size:0.012, transparent:true, opacity:0.26, depthWrite:false });
+  scene.add(new THREE.Points(g, m));
+}
+
+// ============================================================
+// Flickr Public Feed (JSONP)
+// ============================================================
+let paused = false;
+let currentTags = (tagsInput.value || "").trim() || "space,nebula,night";
+let urlPool = [];
+let loadedCount = 0;
+
+let inflight = 0;
+const MAX_INFLIGHT = 12;
+
+// Prefetch decoded textures to eliminate wrap/next-room lag
+const PREFETCH_TARGET = 32;   // keep this many ready-to-apply textures
+const PREFETCH_BURST_ON_WRAP = 12; // ensure at least this many right before wrap refresh
+const readyTextures = [];
+let prefetchRunning = false;
+
+function safeDisposeTexture(tex){
+  try{
+    if (!tex) return;
+    if (tex.image && tex.image.close) tex.image.close?.();
+    tex.dispose();
+  }catch(_){}
+}
+
+async function ensurePrefetch(minReady = PREFETCH_TARGET){
+  if (prefetchRunning || paused) return;
+  prefetchRunning = true;
+  try{
+    while (!paused && readyTextures.length < minReady){
+      if (inflight >= MAX_INFLIGHT){
+        await new Promise(r=>setTimeout(r, 25));
+        continue;
+      }
+      let url = popUrl();
+      if (!url){
+        await refillPool();
+    ensurePrefetch();
+        url = popUrl();
+        if (!url) break;
+      }
+      try{
+        const tex = await loadTexture(url);
+        // cap memory: keep only PREFETCH_TARGET+8 textures
+        readyTextures.push(tex);
+        while (readyTextures.length > PREFETCH_TARGET + 8){
+          safeDisposeTexture(readyTextures.shift());
+        }
+      }catch(_){}
+      // yield to keep rendering smooth
+      await new Promise(r=>setTimeout(r, 0));
+    }
+  } finally {
+    prefetchRunning = false;
+  }
+}
+
+let targetMeshes = [];
+
+// Movement (WASD + Arrow keys)
+const keysDown = new Set();
+let moveEnabled = true;
+const tmpForward = new THREE.Vector3();
+const tmpRight = new THREE.Vector3();
+const tmpUp = new THREE.Vector3(0,1,0);
+
+function updateCounters(){
+  loadedEl.textContent = String(loadedCount);
+  poolEl.textContent = String(urlPool.length);
+  inflightEl.textContent = String(inflight);
+  targetsEl.textContent = String(targetMeshes.length);
+}
+
+function flickrFeed(tags){
+  return new Promise((resolve, reject) => {
+    const cb = "__flickr_cb_" + Date.now() + "_" + Math.random().toString(16).slice(2);
+    const script = document.createElement("script");
+
+    let timeout = setTimeout(() => { cleanup(); reject(new Error("Flickr feed timeout")); }, 9000);
+
+    function cleanup(){
+      clearTimeout(timeout);
+      try{ delete window[cb]; }catch(_){}
+      script.remove();
+    }
+
+    window[cb] = (data) => {
+      cleanup();
+      try{
+        const items = (data && data.items) ? data.items : [];
+        const urls = items.map(it => {
+          const u = it?.media?.m;
+          if (!u) return null;
+          return u.replace("_m.", "_b.");
+        }).filter(Boolean);
+        resolve(urls);
+      } catch(e){ reject(e); }
+    };
+
+    const src =
+      "https://www.flickr.com/services/feeds/photos_public.gne" +
+      "?format=json&lang=en-us&tagmode=all" +
+      "&tags=" + encodeURIComponent(tags) +
+      "&jsoncallback=" + encodeURIComponent(cb) +
+      "&_=" + Date.now();
+
+    script.src = src;
+    script.onerror = () => { cleanup(); reject(new Error("Flickr feed script error")); };
+    document.head.appendChild(script);
+  });
+}
+
+function viaProxy(u){
+  const enc = encodeURIComponent(u);
+  return `https://images.weserv.nl/?url=${enc.replace(/^https%3A%2F%2F/, "")}&default=black&output=jpg`;
+}
+
+async function refillPool(){
+  setStatus("fetching flickr feed…");
+  try{
+    const urls = await flickrFeed(currentTags);
+    for (let i = urls.length - 1; i > 0; i--){
+      const j = (Math.random() * (i+1)) | 0;
+      [urls[i], urls[j]] = [urls[j], urls[i]];
+    }
+    urlPool = urls.concat(urlPool).slice(0, 1200);
+    setStatus(`ok (${urls.length} items)`);
+    toast(`Feed loaded: ${urls.length} photos`);
+    updateCounters();
+  }catch(e){
+    setStatus("feed failed (retry soon)");
+    toast("Feed failed. Check network / extensions.");
+  }
+}
+
+function popUrl(){
+  if (!urlPool.length) return null;
+  return urlPool.pop();
+}
+
+// ============================================================
+// 3D Space: walls + multi-layer slit tunnel
+// ============================================================
+const ROOM_W = 7.2, ROOM_H = 4.0, ROOM_D = 10.0;
+let cellX = 0, cellY = 0, cellZ = 0;
+const halfW = ROOM_W/2, halfH = ROOM_H/2, halfD = ROOM_D/2;
+
+const world = new THREE.Group();
+scene.add(world);
+
+// wireframe
+const roomWire = new THREE.Group();
+world.add(roomWire);
+{
+  const box = new THREE.BoxGeometry(ROOM_W, ROOM_H, ROOM_D);
+  const edges = new THREE.EdgesGeometry(box);
+  roomWire.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.08 })));
+}
+
+// texture helpers
+function makeTileMaterial(opacity=0.86){
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xffffff, transparent:true, opacity, depthWrite:false, side: THREE.DoubleSide
+  });
+  mat.color.setScalar(0.42 + Math.random()*0.10);
+  return mat;
+}
+
+const texLoader = new THREE.TextureLoader();
+texLoader.crossOrigin = "anonymous";
+
+const sharedInitialTextures = new Set();
+function safeDisposeMap(map){
+  if (!map) return;
+  if (sharedInitialTextures.has(map)) return;
+  try{ map.dispose(); }catch(_){}
+}
+
+function loadTexture(url){
+  return new Promise((resolve, reject)=>{
+    if (!url) return reject(new Error("no url"));
+    const finalUrl = proxyChk.checked ? viaProxy(url) : url;
+    inflight++; updateCounters();
+
+    texLoader.load(
+      finalUrl,
+      (tex)=>{
+        inflight = Math.max(0, inflight-1); updateCounters();
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+        resolve(tex);
+      },
+      undefined,
+      ()=>{
+        const fb = finalUrl.replace("_b.", "_m.");
+        if (fb !== finalUrl){
+          texLoader.load(
+            fb,
+            (tex)=>{
+              inflight = Math.max(0, inflight-1); updateCounters();
+              tex.colorSpace = THREE.SRGBColorSpace;
+              tex.minFilter = THREE.LinearFilter;
+              tex.magFilter = THREE.LinearFilter;
+              tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+              resolve(tex);
+            },
+            undefined,
+            ()=>{
+              inflight = Math.max(0, inflight-1); updateCounters();
+              reject(new Error("texture load fail"));
+            }
+          );
+        } else {
+          inflight = Math.max(0, inflight-1); updateCounters();
+          reject(new Error("texture load fail"));
+        }
+      }
+    );
+  });
+}
+
+// Walls
+const wallsGroup = new THREE.Group();
+world.add(wallsGroup);
+const wallTiles = [];
+
+function clearWalls(){
+  for (const t of wallTiles){
+    t.mesh.geometry.dispose();
+    safeDisposeMap(t.mesh.material.map);
+    t.mesh.material.dispose();
+    wallsGroup.remove(t.mesh);
+  }
+  wallTiles.length = 0;
+}
+
+function addWallGrid({ wallId, origin, uDir, vDir, uLen, vLen, uCount, vCount, opacity=0.84, cellSize=null }){
+  // cellSize: if provided, each tile is a same-size square across ALL walls (requested).
+  // If null, fall back to per-wall square sizing.
+  const gap = 0.05;
+
+  const uStep = uLen / uCount;
+  const vStep = vLen / vCount;
+
+  const cell = (cellSize != null) ? cellSize : Math.min(uStep, vStep);
+  const tileW = cell - gap;
+  const tileH = cell - gap;
+
+  const geom = new THREE.PlaneGeometry(tileW, tileH);
+
+  // Center a square 4x4 (or any count) grid within wall extents
+  const uSpan = cell * uCount;
+  const vSpan = cell * vCount;
+
+  for (let j=0;j<vCount;j++){
+    for (let i=0;i<uCount;i++){
+      const u = (i + 0.5) / uCount - 0.5;
+      const v = (j + 0.5) / vCount - 0.5;
+
+      const pos = origin.clone()
+        .add(uDir.clone().multiplyScalar(u * uSpan))
+        .add(vDir.clone().multiplyScalar(v * vSpan));
+
+      const mesh = new THREE.Mesh(geom, makeTileMaterial(opacity));
+      mesh.userData.kind = 'wall';
+      mesh.position.copy(pos);
+
+      const n = new THREE.Vector3().crossVectors(uDir, vDir).normalize();
+      mesh.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1), n));
+
+      // micro depth/tilt
+      mesh.position.add(n.clone().multiplyScalar((Math.random()*2 - 1) * 0.012));
+      mesh.rotateOnAxis(uDir, (Math.random()*2 - 1) * 0.015);
+
+      mesh.renderOrder = 1;
+      wallsGroup.add(mesh);
+      wallTiles.push({ mesh, wallId });
+    }
+  }
+}
+
+function buildWalls(){
+  clearWalls();
+  const inset = 0.10;
+
+  // Same-size squares across all walls:
+  // choose a cell size that fits on EVERY face (limited by room height).
+  const cellSize = (ROOM_H - inset*2) / 4;
+
+  // FLOOR (XZ)
+  addWallGrid({
+    wallId:"floor",
+    origin: new THREE.Vector3(0, -halfH, 0),
+    uDir: new THREE.Vector3(1,0,0),
+    vDir: new THREE.Vector3(0,0,1),
+    uLen: ROOM_W - inset*2,
+    vLen: ROOM_D - inset*2,
+    uCount: 4, vCount: 4,
+    cellSize,
+    opacity: 0.80
+  });
+
+  // CEILING (XZ)
+  addWallGrid({
+    wallId:"ceiling",
+    origin: new THREE.Vector3(0, +halfH, 0),
+    uDir: new THREE.Vector3(1,0,0),
+    vDir: new THREE.Vector3(0,0,-1),
+    uLen: ROOM_W - inset*2,
+    vLen: ROOM_D - inset*2,
+    uCount: 4, vCount: 4,
+    cellSize,
+    opacity: 0.80
+  });
+
+  // LEFT (ZY)
+  addWallGrid({
+    wallId:"left",
+    origin: new THREE.Vector3(-halfW, 0, 0),
+    uDir: new THREE.Vector3(0,0,1),
+    vDir: new THREE.Vector3(0,1,0),
+    uLen: ROOM_D - inset*2,
+    vLen: ROOM_H - inset*2,
+    uCount: 4, vCount: 4,
+    cellSize,
+    opacity: 0.84
+  });
+
+  // RIGHT (ZY)
+  addWallGrid({
+    wallId:"right",
+    origin: new THREE.Vector3(+halfW, 0, 0),
+    uDir: new THREE.Vector3(0,0,-1),
+    vDir: new THREE.Vector3(0,1,0),
+    uLen: ROOM_D - inset*2,
+    vLen: ROOM_H - inset*2,
+    uCount: 4, vCount: 4,
+    cellSize,
+    opacity: 0.84
+  });
+
+  // FRONT (XY) — at z = -halfD (facing inward)
+  addWallGrid({
+    wallId:"front",
+    origin: new THREE.Vector3(0, 0, -halfD),
+    uDir: new THREE.Vector3(1,0,0),
+    vDir: new THREE.Vector3(0,1,0),
+    uLen: ROOM_W - inset*2,
+    vLen: ROOM_H - inset*2,
+    uCount: 4, vCount: 4,
+    cellSize,
+    opacity: 0.86
+  });
+
+  // BACK (XY) — at z = +halfD (facing inward)
+  addWallGrid({
+    wallId:"back",
+    origin: new THREE.Vector3(0, 0, +halfD),
+    uDir: new THREE.Vector3(-1,0,0),
+    vDir: new THREE.Vector3(0,1,0),
+    uLen: ROOM_W - inset*2,
+    vLen: ROOM_H - inset*2,
+    uCount: 4, vCount: 4,
+    cellSize,
+    opacity: 0.86
+  });
+}
+buildWalls();
+
+// Tunnel
+let tunnelEnabled = true;
+let horizEnabled = true; // horizontal stretched strips
+let depthEnabled = true; // depth-stretched strips (along Z)
+
+const tunnelGroup = new THREE.Group();
+world.add(tunnelGroup);
+
+// Depth strips: long planes along Z (perception of "depth-stretched" images)
+const depthGroup = new THREE.Group();
+world.add(depthGroup);
+const depthMeshes = [];
+
+const slitMeshes = [];
+function clearTunnel(){
+  for (const m of slitMeshes){
+    try{ m.geometry.dispose(); }catch(_){}
+    try{ safeDisposeMap(m.material.map); }catch(_){}
+    try{ m.material.dispose(); }catch(_){}
+  }
+  slitMeshes.length = 0;
+  tunnelGroup.clear();
+}
+
+function buildTunnel(){
+  clearTunnel();
+  const layers = Math.max(3, Math.min(22, parseInt(layersInput.value || "12", 10)));
+
+  // Vertical slits (existing look)
+  const V_SLITS = 36; // was 54; 1.5x wider spacing
+  const V_SLIT_W = 0.075;
+  const V_SLIT_H = ROOM_H * 0.94;
+  const V_SPAN   = ROOM_W * 0.94;
+  const vGeom = new THREE.PlaneGeometry(V_SLIT_W, V_SLIT_H);
+
+  // Horizontal stretched strips (new)
+  // Wide & thin planes -> the same image becomes "horizontally stretched" in perception.
+  const H_SLITS = 12; // was 18; 1.5x wider spacing
+  const H_SLIT_W = ROOM_W * 0.94;
+  const H_SLIT_H = 0.070;
+  const H_SPAN_Y = ROOM_H * 0.88;
+  const hGeom = new THREE.PlaneGeometry(H_SLIT_W, H_SLIT_H);
+
+  const zFront = -halfD + 0.45;
+  const zBack  = +halfD - 0.60;
+
+  for (let l=0; l<layers; l++){
+    const lt = (layers === 1) ? 0.5 : (l/(layers-1));
+    const z = THREE.MathUtils.lerp(zFront, zBack, lt);
+
+    const layerG = new THREE.Group();
+    layerG.position.z = z;
+    layerG.rotation.y = (Math.sin(lt*Math.PI*2) * 0.05) + (Math.random()*2 - 1) * 0.015;
+    layerG.rotation.x = (Math.cos(lt*Math.PI*2) * 0.03) + (Math.random()*2 - 1) * 0.012;
+
+    const op = THREE.MathUtils.lerp(0.62, 0.18, lt);
+
+    // ---- vertical slits ----
+    for (let i=0;i<V_SLITS;i++){
+      const t = (i/(V_SLITS-1))*2 - 1;
+      const x = t * (V_SPAN/2);
+
+      const mat = makeTileMaterial(op);
+      mat.blending = THREE.AdditiveBlending;
+      mat.opacity = op * (0.85 + Math.random()*0.25);
+
+      const mesh = new THREE.Mesh(vGeom, mat);
+      mesh.userData.kind = 'slit';
+      mesh.position.set(x, 0, (Math.random()*2 - 1) * 0.06);
+      mesh.rotation.y = (Math.random()*2 - 1) * 0.12;
+      mesh.rotation.x = (Math.random()*2 - 1) * 0.04;
+      mesh.renderOrder = 2;
+
+      layerG.add(mesh);
+      slitMeshes.push(mesh);
+    }
+
+    // ---- horizontal stretched strips ----
+    // place them across Y so you get a "grid" / "lattice" feel.
+    // Slightly behind vertical slits for parallax.
+    for (let j=0;j<H_SLITS;j++){
+      const ty = (j/(H_SLITS-1))*2 - 1;
+      const y = ty * (H_SPAN_Y/2);
+
+      const mat = makeTileMaterial(op * 0.95);
+      mat.blending = THREE.AdditiveBlending;
+      mat.opacity = (op * 0.62) * (0.85 + Math.random()*0.25);
+
+      const mesh = new THREE.Mesh(hGeom, mat);
+      mesh.userData.kind = 'slit';
+      mesh.position.set(0, y, 0.08 + (Math.random()*2 - 1) * 0.05);
+      mesh.rotation.y = (Math.random()*2 - 1) * 0.08;
+      mesh.rotation.x = (Math.random()*2 - 1) * 0.03;
+      mesh.renderOrder = 2;
+
+      // Keep a handle so we can toggle later
+      mesh.userData.horiz = true;
+
+      layerG.add(mesh);
+      slitMeshes.push(mesh);
+    }
+
+    tunnelGroup.add(layerG);
+  }
+}
+buildTunnel();
+// apply horizontal visibility
+for (const layer of tunnelGroup.children){
+  for (const child of layer.children){
+    if (child.userData && child.userData.horiz) child.visible = horizEnabled;
+  }
+
+function clearDepthStrips(){
+  for (const m of depthMeshes){
+    try{ m.geometry.dispose(); }catch(_){}
+    try{ safeDisposeMap(m.material.map); }catch(_){}
+    try{ m.material.dispose(); }catch(_){}
+  }
+  depthMeshes.length = 0;
+  depthGroup.clear();
+}
+
+function buildDepthStrips(){
+  clearDepthStrips();
+
+  // Count tuned for performance; these are large so keep moderate
+  const COUNT = 17; // was 26; 1.5x lower density
+
+  // Long dimension along Z, thin along Y
+  // PlaneGeometry is in XY by default; rotateY(PI/2) to make it lie in YZ (width becomes Z span).
+  for (let i=0;i<COUNT;i++){
+    const longZ = (ROOM_D * 0.92) * (0.75 + Math.random()*0.35); // 0.75..1.10
+    const thinY = 0.055 + Math.random()*0.07;                   // 0.055..0.125
+
+    const geom = new THREE.PlaneGeometry(longZ, thinY);
+
+    const op = 0.09 + Math.random()*0.14; // 0.09..0.23 (mid)
+    const mat = makeTileMaterial(op);
+    mat.blending = THREE.AdditiveBlending;
+    mat.opacity = op;
+    mat.color.setScalar(1.0);
+    mat.color.setScalar(1.0);
+    mat.depthWrite = false;
+
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.userData.kind = 'slit';
+    mesh.userData.depth = true;
+
+    // Orient so long side runs along Z, height runs along Y
+    mesh.rotation.y = Math.PI/2;
+
+    // Place within room, slightly biased toward center
+    const xSpan = (ROOM_W * 0.88) / 2;
+    const ySpan = (ROOM_H * 0.82) / 2;
+
+    mesh.position.x = (Math.random()*2 - 1) * xSpan * (0.65 + Math.random()*0.45);
+    mesh.position.y = (Math.random()*2 - 1) * ySpan * (0.65 + Math.random()*0.55);
+    mesh.position.z = 0;
+
+    // Subtle cant and waviness
+    mesh.rotation.x += (Math.random()*2 - 1) * 0.14;
+    mesh.rotation.z  = (Math.random()*2 - 1) * 0.28;
+
+    // tiny offset along its normal
+    const n = new THREE.Vector3(1,0,0); // after rotY, normal is roughly +/-X
+    mesh.position.add(n.multiplyScalar((Math.random()*2 - 1) * 0.08));
+
+    mesh.visible = depthEnabled;
+    mesh.renderOrder = 2;
+
+    depthGroup.add(mesh);
+    depthMeshes.push(mesh);
+  }
+
+  // A few "ribbons" (taller strips) to emphasize depth
+  const RIBBONS = 5; // was 8; 1.5x lower density
+  for (let i=0;i<RIBBONS;i++){
+    const longZ = ROOM_D * (0.82 + Math.random()*0.16);
+    const tallY = ROOM_H * (0.18 + Math.random()*0.22);
+
+    const geom = new THREE.PlaneGeometry(longZ, tallY);
+
+    const op = 0.04 + Math.random()*0.08; // 0.04..0.12 (mid ribbons)
+    const mat = makeTileMaterial(op);
+    mat.blending = THREE.AdditiveBlending;
+    mat.opacity = op;
+    mat.depthWrite = false;
+
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.userData.kind = 'slit';
+    mesh.userData.depth = true;
+
+    mesh.rotation.y = Math.PI/2;
+
+    mesh.position.x = (Math.random()*2 - 1) * (ROOM_W * 0.22);
+    mesh.position.y = (Math.random()*2 - 1) * (ROOM_H * 0.22);
+    mesh.position.z = (Math.random()*2 - 1) * (ROOM_D * 0.05);
+
+    mesh.rotation.x += (Math.random()*2 - 1) * 0.10;
+    mesh.rotation.z  = (Math.random()*2 - 1) * 0.18;
+
+    mesh.visible = depthEnabled;
+    mesh.renderOrder = 2;
+
+    depthGroup.add(mesh);
+    depthMeshes.push(mesh);
+  }
+}
+
+}
+
+function rebuildTargets(){
+  targetMeshes = [];
+  for (const t of wallTiles) targetMeshes.push(t.mesh);
+  for (const m of slitMeshes) targetMeshes.push(m);
+  for (const m of depthMeshes) targetMeshes.push(m);
+  updateCounters();
+
+}
+
+function wrapSpaceIfNeeded(){
+  // If the camera leaves the current cube bounds, shift the whole world by 1 cell so the camera
+  // is always inside an identical cube (infinite tiling illusion).
+  // We shift OrbitControls target too, to keep camera control stable.
+  const localX = camera.position.x - world.position.x;
+  const localY = camera.position.y - world.position.y;
+  const localZ = camera.position.z - world.position.z;
+
+  let sx = 0, sy = 0, sz = 0;
+
+  if (localX > halfW) { sx = ROOM_W; cellX += 1; }
+  else if (localX < -halfW) { sx = -ROOM_W; cellX -= 1; }
+
+  if (localY > halfH) { sy = ROOM_H; cellY += 1; }
+  else if (localY < -halfH) { sy = -ROOM_H; cellY -= 1; }
+
+  if (localZ > halfD) { sz = ROOM_D; cellZ += 1; }
+  else if (localZ < -halfD) { sz = -ROOM_D; cellZ -= 1; }
+
+  if (sx || sy || sz){
+    const shift = new THREE.Vector3(sx, sy, sz);
+    world.position.add(shift);
+    controls.target.add(shift);
+
+    // Give a tiny "interstellar glitch" so the wrap feels intentional
+    wrapFlash();
+    // prefetch ahead so the refresh burst is instant
+    ensurePrefetch(PREFETCH_BURST_ON_WRAP);
+
+    // Kick a small refresh burst so new "cell" doesn't look like the same room
+    // (non-blocking; keeps existing images until new ones arrive)
+    for (let i=0;i<10;i++){
+      applyOneImageTo(pickRandomTarget());
+    }
+
+    if (cellEl) cellEl.textContent = `${cellX},${cellY},${cellZ}`;
+  }
+}
+rebuildTargets();
+
+// ============================================================
+// Behavior: Seed7 FillAll (anti-repeat) → stream +4/sec
+const SEED_COUNT = 7;
+
+// ============================================================
+function pickRandomTarget(){
+  if (!targetMeshes.length) return null;
+  return targetMeshes[(Math.random()*targetMeshes.length)|0];
+}
+
+async function applyOneImageTo(mesh){
+  if (!mesh) return;
+  if (inflight >= MAX_INFLIGHT) return;
+
+  let tex = null;
+
+  // Use prefetched textures first (removes visible lag on wraps)
+  if (readyTextures.length){
+    tex = readyTextures.pop();
+    // keep pipeline filled
+    ensurePrefetch();
+  } else {
+    let url = popUrl();
+    if (!url){
+      await refillPool();
+      url = popUrl();
+      if (!url) return;
+    }
+    try{
+      tex = await loadTexture(url);
+    }catch(_){
+      return;
+    }
+  }
+
+  try{
+    safeDisposeMap(mesh.material.map);
+    mesh.material.map = tex;
+    mesh.material.needsUpdate = true;
+
+    // Slightly dim the stretched lattice (slits/depth) so space reads cleaner
+    if (mesh.userData && mesh.userData.depth){
+      mesh.material.color.setScalar(0.82);
+      mesh.material.opacity = Math.min(0.42, Math.max(mesh.material.opacity, 0.14));
+    } else if (mesh.userData && mesh.userData.kind === 'slit'){
+      mesh.material.color.setScalar(0.90);
+      mesh.material.opacity = Math.min(0.78, Math.max(mesh.material.opacity, 0.24));
+    } else {
+      mesh.material.color.setScalar(1.0);
+      mesh.material.opacity = Math.min(0.95, Math.max(mesh.material.opacity, 0.55));
+    }
+
+    loadedCount++;
+    updateCounters();
+  }catch(_){}
+}
+
+async function seedFillAll(){
+  // Requested:
+  // - 初回ロード枚数を 7 に増やす
+  // - 少ない枚数でやりくりしているのがバレにくいよう、壁タイルは「同じ画像でも別の切り出し」にする
+  if (urlPool.length < SEED_COUNT * 2) await refillPool();
+
+  // Collect URLs
+  const urls = [];
+  while (urls.length < SEED_COUNT){
+    const u = popUrl();
+    if (!u) { await refillPool(); continue; }
+    urls.push(u);
+  }
+
+  // Load base textures (shared image sources)
+  const baseTexs = await Promise.all(urls.map(async (u)=>{
+    try{
+      const tex = await loadTexture(u);
+      sharedInitialTextures.add(tex); // never dispose base in safeDisposeMap
+      return tex;
+    }catch(_){
+      return null;
+    }
+  }));
+
+  // Best effort refill failures
+  for (let i=0;i<SEED_COUNT;i++){
+    if (baseTexs[i]) continue;
+    let u = popUrl();
+    if (!u){ await refillPool(); u = popUrl(); }
+    if (!u) continue;
+    try{
+      const tex = await loadTexture(u);
+      sharedInitialTextures.add(tex);
+      baseTexs[i] = tex;
+    }catch(_){}
+  }
+
+  const available = baseTexs.filter(Boolean);
+  if (!available.length) return;
+
+  // Shuffle indexes so neighboring tiles don't obviously repeat
+  const pickIdx = new Array(targetMeshes.length);
+  for (let i=0;i<pickIdx.length;i++) pickIdx[i] = (Math.random()*available.length)|0;
+
+  // A tiny pass to reduce immediate repeats (local smoothing)
+  for (let i=1;i<pickIdx.length;i++){
+    if (pickIdx[i] === pickIdx[i-1] && available.length > 1){
+      pickIdx[i] = (pickIdx[i] + 1 + ((Math.random()* (available.length-1))|0)) % available.length;
+    }
+  }
+
+  // Apply across ALL targets
+  for (let i=0;i<targetMeshes.length;i++){
+    const mesh = targetMeshes[i];
+    const base = available[pickIdx[i] % available.length];
+
+    // For walls: clone texture and apply a random crop/rotation so repetition is harder to notice.
+    // For slits: reuse base directly (they are thin + additive + depth-faded), but still randomize assignment.
+    let tex = base;
+
+    if (mesh.userData.kind === 'wall'){
+      tex = base.clone(); // shares image, but independent transform
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+
+      // Random crop (repeat < 1) + offset within bounds
+      const r = 0.55 + Math.random()*0.45;      // 0.55..1.0
+      const r2 = 0.55 + Math.random()*0.45;
+      tex.repeat.set(r, r2);
+      tex.offset.set(Math.random()*(1-r), Math.random()*(1-r2));
+
+      // Gentle rotation around center
+      tex.center.set(0.5, 0.5);
+      tex.rotation = (Math.random()*2 - 1) * 0.35; // ±0.35 rad
+
+      tex.needsUpdate = true;
+    }
+
+    safeDisposeMap(mesh.material.map);
+    mesh.material.map = tex;
+    mesh.material.needsUpdate = true;
+
+    // Per-tile "grade": brightness back to near-original for 3-direction stretched images
+    if (mesh.userData && mesh.userData.depth){
+      // Depth-stretched strips: brightness restored, keep mid transparency bounds
+      const grade = 0.80 + Math.random()*0.26; // 0.80..1.06 (slightly dimmer)
+      mesh.material.color.setScalar(grade);
+      mesh.material.opacity = Math.min(0.42, Math.max(mesh.material.opacity, 0.14));
+    } else if (mesh.userData && mesh.userData.kind === 'slit'){
+      // Slits (vertical + horizontal): brightness restored
+      const grade = 0.82 + Math.random()*0.26; // 0.82..1.08 (slightly dimmer)
+      mesh.material.color.setScalar(grade);
+      mesh.material.opacity = Math.min(0.78, Math.max(mesh.material.opacity, 0.24));
+    } else {
+      // Walls: richer
+      const grade = 0.86 + Math.random()*0.28; // 0.86..1.14
+      mesh.material.color.setScalar(grade);
+      mesh.material.opacity = Math.min(0.95, Math.max(mesh.material.opacity, 0.62));
+    }
+  }
+
+  loadedCount += available.length;
+  updateCounters();
+}
+
+
+let streamTimer = null;
+function startStream(){
+  if (streamTimer) clearInterval(streamTimer);
+  streamTimer = setInterval(async ()=>{
+    if (paused) return;
+    if (urlPool.length < 80) refillPool();
+    // 10 new photos per second, applied to random targets
+    await Promise.all(Array.from({length:10}, ()=>applyOneImageTo(pickRandomTarget())));
+  }, 1000);
+}
+
+// ============================================================
+// UI
+// ============================================================
+applyBtn.onclick = async ()=>{
+  currentTags = (tagsInput.value || "").trim() || "space,nebula,night";
+  urlPool = [];
+  loadedCount = 0;
+  updateCounters();
+
+  buildTunnel();
+  // apply horizontal visibility
+  for (const layer of tunnelGroup.children){
+    for (const child of layer.children){
+      if (child.userData && child.userData.horiz) child.visible = horizEnabled;
+    }
+  }
+  buildDepthStrips();
+  rebuildTargets();
+
+  setStatus("tags applied → reloading…");
+  await refillPool();
+  await seedFillAll();
+    ensurePrefetch();
+
+  setStatus("running");
+  toast("Seeded 7 → filled all targets. Streaming +4/sec");
+};
+
+pauseBtn.onclick = ()=>{
+  paused = !paused;
+  pauseBtn.textContent = paused ? "Resume" : "Pause";
+  toast(paused ? "Paused" : "Resumed");
+};
+
+window.addEventListener("keydown", async (e)=>{
+  const k = e.key.toLowerCase();
+
+  // track movement keys (prevent scrolling / browser stealing keys)
+  if (["w","a","s","d","arrowup","arrowdown","arrowleft","arrowright","shift"].includes(k)){
+    keysDown.add(k);
+    e.preventDefault();
+  }
+
+  if (k === "h"){
+    hud.style.display = (hud.style.display === "none") ? "block" : "none";
+    toast(hud.style.display === "none" ? "HUD hidden" : "HUD shown");
+  }
+  if (k === "r"){
+    await refillPool();
+    toast("Reload feed");
+  }
+  if (k === "t"){
+    tunnelEnabled = !tunnelEnabled;
+    tunnelGroup.visible = tunnelEnabled;
+    toast("Tunnel: " + (tunnelEnabled ? "ON" : "OFF"));
+  }
+  if (k === "x"){
+    horizEnabled = !horizEnabled;
+    // toggle only horizontal strip meshes (userData.horiz=true)
+    for (const layer of tunnelGroup.children){
+      for (const child of layer.children){
+        if (child.userData && child.userData.horiz) child.visible = horizEnabled;
+      }
+    }
+    toast("Horizontal strips: " + (horizEnabled ? "ON" : "OFF"));
+  }
+  if (k === "z"){
+    depthEnabled = !depthEnabled;
+    for (const mm of depthMeshes){
+      mm.visible = depthEnabled;
+    }
+    toast("Depth strips: " + (depthEnabled ? "ON" : "OFF"));
+  }
+  if (k === "v"){
+    aetherBgEnabled = !aetherBgEnabled;
+    if (aetherBgEnabled && aetherBgTex){
+      scene.background = aetherBgTex;
+    } else {
+      scene.background = null;
+    }
+    toast("Aether BG: " + (aetherBgEnabled ? "ON" : "OFF"));
+  }
+  if (k === "m"){
+    moveEnabled = !moveEnabled;
+    toast("Move: " + (moveEnabled ? "ON" : "OFF"));
+  }
+  if (e.code === "Space"){
+    e.preventDefault();
+    paused = !paused;
+    pauseBtn.textContent = paused ? "Resume" : "Pause";
+    toast(paused ? "Paused" : "Resumed");
+  }
+}, { passive:false });
+
+window.addEventListener("keyup", (e)=>{
+  const k = e.key.toLowerCase();
+  keysDown.delete(k);
+});
+
+window.addEventListener("blur", ()=>{
+  keysDown.clear();
+});
+window.addEventListener("blur", ()=>{ keysDown.clear(); });
+// ============================================================
+// Animate
+// ============================================================
+let t0 = performance.now();
+function animate(){
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const t = (now - t0) * 0.001;
+
+  // dt for movement
+  const dt = Math.min(0.05, (now - (animate._prevNow || now)) * 0.001);
+  animate._prevNow = now;
+
+  controls.update();
+
+  // WASD / Arrow movement: POV-style (relative to camera view direction)
+  if (moveEnabled && keysDown.size){
+    // Forward = camera view direction (includes pitch). This is true "fly" POV.
+    camera.getWorldDirection(tmpForward);
+    if (tmpForward.lengthSq() < 1e-6) tmpForward.set(0,0,-1);
+    tmpForward.normalize();
+
+    // Right = forward x up (robust fallback if looking straight up/down)
+    tmpRight.crossVectors(tmpForward, camera.up).normalize();
+    if (tmpRight.lengthSq() < 1e-6) tmpRight.set(1,0,0);
+
+
+    let f = 0, r = 0;
+    if (keysDown.has("w") || keysDown.has("arrowup")) f += 1;
+    if (keysDown.has("s") || keysDown.has("arrowdown")) f -= 1;
+    if (keysDown.has("d") || keysDown.has("arrowright")) r += 1;
+    if (keysDown.has("a") || keysDown.has("arrowleft")) r -= 1;
+
+    // normalize diagonal
+    const mag = Math.hypot(f, r) || 1;
+    f /= mag; r /= mag;
+
+    const baseSpeed = 2.6; // units/sec
+    const boost = (keysDown.has("shift") ? 2.2 : 1.0);
+    const speed = baseSpeed * boost;
+
+    const move = new THREE.Vector3()
+      .addScaledVector(tmpForward, f * speed * dt)
+      .addScaledVector(tmpRight, r * speed * dt);
+
+    camera.position.add(move);
+    controls.target.add(move);
+  }
+
+
+  wrapSpaceIfNeeded();
+
+  if (tunnelEnabled){
+    const L = tunnelGroup.children.length || 1;
+    for (let i=0;i<tunnelGroup.children.length;i++){
+      const g = tunnelGroup.children[i];
+      const lt = (L === 1) ? 0.5 : (i/(L-1));
+      g.rotation.y += Math.sin(t*0.18 + lt*6.0) * 0.00025;
+      g.rotation.x += Math.cos(t*0.14 + lt*5.0) * 0.00018;
+      g.position.x = Math.sin(t*0.10 + lt*7.0) * 0.02;
+      g.position.y = Math.cos(t*0.11 + lt*7.0) * 0.015;
+    }
+  }
+
+  // aether background drift
+  if (aetherBgEnabled && aetherBgTex){
+    aetherBgTex.offset.x = (aetherBgTex.offset.x + dt * 0.004) % 1;
+    aetherBgTex.offset.y = (aetherBgTex.offset.y + dt * 0.0025) % 1;
+  }
+
+  renderer.render(scene, camera);
+}
+
+// ============================================================
+// Init
+// ============================================================
+async function init(){
+  setStatus("init…");
+  updateCounters();
+
+  await refillPool();
+  await seedFillAll();
+    ensurePrefetch();
+
+  setStatus("running");
+  toast("3D tunnel filled (seed7 anti-repeat). Streaming +4/sec…");
+
+  startStream();
+  animate();
+}
+init();
+</script>
+</body>
+</html>
